@@ -1,0 +1,184 @@
+# Codemagic CI/CD Configuration for NativiWeb Studio
+# https://docs.codemagic.io/yaml/yaml-getting-started/
+
+workflows:
+  # ==================== Android Workflow ====================
+  android-build:
+    name: Android Build
+    instance_type: linux_x2
+    max_build_duration: 30
+    
+    environment:
+      vars:
+        NATIVIWEB_API_URL: $NATIVIWEB_API_URL
+        PROJECT_ID: $PROJECT_ID
+        BUILD_ID: $BUILD_ID
+      android_signing:
+        - nativiweb_keystore
+      groups:
+        - aws_credentials
+        - nativiweb_api
+    
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: 'build/*'
+          include: true
+    
+    scripts:
+      - name: Update status - Started
+        script: |
+          curl -X POST "$NATIVIWEB_API_URL/builds/$BUILD_ID/status" \
+            -H "Content-Type: application/json" \
+            -d '{"status": "processing", "phase": "preparing"}'
+      
+      - name: Download project template
+        script: |
+          curl -o project.zip "$NATIVIWEB_API_URL/generator/download/$PROJECT_ID/android"
+          unzip project.zip -d $CM_BUILD_DIR/android-project
+      
+      - name: Set up local properties
+        script: |
+          cd $CM_BUILD_DIR/android-project
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+      
+      - name: Update status - Building
+        script: |
+          curl -X POST "$NATIVIWEB_API_URL/builds/$BUILD_ID/status" \
+            -H "Content-Type: application/json" \
+            -d '{"status": "processing", "phase": "gradle_sync", "progress": 20}'
+      
+      - name: Build Android
+        script: |
+          cd $CM_BUILD_DIR/android-project
+          
+          # Build debug
+          ./gradlew assembleDebug
+          
+          # Build release with signing
+          ./gradlew assembleRelease bundleRelease
+      
+      - name: Update status - Uploading
+        script: |
+          curl -X POST "$NATIVIWEB_API_URL/builds/$BUILD_ID/status" \
+            -H "Content-Type: application/json" \
+            -d '{"status": "processing", "phase": "uploading", "progress": 90}'
+    
+    artifacts:
+      - android-project/app/build/outputs/**/*.apk
+      - android-project/app/build/outputs/**/*.aab
+    
+    publishing:
+      scripts:
+        - name: Upload to S3
+          script: |
+            pip install awscli
+            aws s3 cp $CM_BUILD_DIR/android-project/app/build/outputs/ \
+              s3://$AWS_S3_BUCKET/builds/$BUILD_ID/ \
+              --recursive
+        
+        - name: Update status - Completed
+          script: |
+            curl -X POST "$NATIVIWEB_API_URL/builds/$BUILD_ID/status" \
+              -H "Content-Type: application/json" \
+              -d '{"status": "completed", "phase": "completed", "progress": 100}'
+      
+      google_play:
+        credentials: $GOOGLE_PLAY_CREDENTIALS
+        track: internal
+        submit_as_draft: true
+
+  # ==================== iOS Workflow ====================
+  ios-build:
+    name: iOS Build
+    instance_type: mac_mini_m1
+    max_build_duration: 45
+    
+    environment:
+      vars:
+        NATIVIWEB_API_URL: $NATIVIWEB_API_URL
+        PROJECT_ID: $PROJECT_ID
+        BUILD_ID: $BUILD_ID
+        XCODE_VERSION: latest
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.nativiweb.$PROJECT_NAME
+      groups:
+        - aws_credentials
+        - nativiweb_api
+        - appstore_connect
+    
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: 'build-ios/*'
+          include: true
+    
+    scripts:
+      - name: Update status - Started
+        script: |
+          curl -X POST "$NATIVIWEB_API_URL/builds/$BUILD_ID/status" \
+            -H "Content-Type: application/json" \
+            -d '{"status": "processing", "phase": "preparing"}'
+      
+      - name: Download project template
+        script: |
+          curl -o project.zip "$NATIVIWEB_API_URL/generator/download/$PROJECT_ID/ios"
+          unzip project.zip -d $CM_BUILD_DIR/ios-project
+      
+      - name: Install CocoaPods
+        script: |
+          cd $CM_BUILD_DIR/ios-project
+          pod install
+      
+      - name: Update status - Building
+        script: |
+          curl -X POST "$NATIVIWEB_API_URL/builds/$BUILD_ID/status" \
+            -H "Content-Type: application/json" \
+            -d '{"status": "processing", "phase": "compiling", "progress": 40}'
+      
+      - name: Set up code signing
+        script: |
+          xcode-project use-profiles
+      
+      - name: Build iOS
+        script: |
+          cd $CM_BUILD_DIR/ios-project
+          
+          xcode-project build-ipa \
+            --workspace App.xcworkspace \
+            --scheme App \
+            --config Release
+      
+      - name: Update status - Uploading
+        script: |
+          curl -X POST "$NATIVIWEB_API_URL/builds/$BUILD_ID/status" \
+            -H "Content-Type: application/json" \
+            -d '{"status": "processing", "phase": "uploading", "progress": 90}'
+    
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - build/ios/xcarchive/*.xcarchive
+      - /tmp/xcodebuild_logs/*.log
+    
+    publishing:
+      scripts:
+        - name: Upload to S3
+          script: |
+            pip install awscli
+            aws s3 cp $CM_BUILD_DIR/build/ios/ \
+              s3://$AWS_S3_BUCKET/builds/$BUILD_ID/ \
+              --recursive
+        
+        - name: Update status - Completed
+          script: |
+            curl -X POST "$NATIVIWEB_API_URL/builds/$BUILD_ID/status" \
+              -H "Content-Type: application/json" \
+              -d '{"status": "completed", "phase": "completed", "progress": 100}'
+      
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        submit_to_app_store: false
