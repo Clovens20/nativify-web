@@ -7,7 +7,8 @@ import {
   FileText, 
   Settings,
   LogOut,
-  Zap
+  Zap,
+  Shield
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { cn } from '../../lib/utils';
@@ -64,6 +65,23 @@ export const Sidebar = () => {
             </Link>
           );
         })}
+        
+        {/* Admin Link - only for admins */}
+        {user?.role === 'admin' && (
+          <Link
+            to="/admin"
+            data-testid="nav-admin"
+            className={cn(
+              "flex items-center gap-3 px-4 py-3 rounded-sm transition-all duration-200 mt-4",
+              location.pathname === '/admin'
+                ? "bg-destructive/10 text-destructive border border-destructive/30" 
+                : "text-destructive/70 hover:text-destructive hover:bg-destructive/10"
+            )}
+          >
+            <Shield className="w-5 h-5" />
+            <span className="font-medium">Admin Panel</span>
+          </Link>
+        )}
       </nav>
 
       {/* User section */}
