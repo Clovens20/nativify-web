@@ -1924,6 +1924,13 @@ async def admin_get_config(admin_id: str):
         config = PlatformConfig().model_dump()
         config['updated_at'] = config['updated_at'].isoformat()
         await db.platform_config.insert_one(config)
+    else:
+        # Ensure datetime is properly serialized
+        if isinstance(config.get('updated_at'), datetime):
+            config['updated_at'] = config['updated_at'].isoformat()
+        elif isinstance(config.get('updated_at'), str):
+            # Already a string, keep as is
+            pass
     
     return config
 
