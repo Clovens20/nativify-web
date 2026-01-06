@@ -421,7 +421,8 @@ class NativiWebAPITester:
         if self.failed_tests:
             self.log(f"\n❌ FAILED TESTS:")
             for failure in self.failed_tests:
-                self.log(f"   - {failure['test']}: {failure.get('error', f\"Expected {failure.get('expected')}, got {failure.get('actual')}\")}")
+                error_msg = failure.get('error', f"Expected {failure.get('expected')}, got {failure.get('actual')}")
+                self.log(f"   - {failure['test']}: {error_msg}")
         
         return len(self.failed_tests) == 0
 
