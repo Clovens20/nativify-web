@@ -134,7 +134,7 @@ class Build(BaseModel):
     status: str = "pending"
     phase: str = "queued"
     progress: int = 0
-    logs: List[Dict[str, Any]] = []
+    logs: List[Any] = []  # Accept both string and dict logs
     artifacts: List[Dict[str, str]] = []
     download_url: Optional[str] = None
     error_message: Optional[str] = None
