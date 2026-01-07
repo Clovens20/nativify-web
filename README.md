@@ -9,18 +9,17 @@ NativiWeb Studio is a comprehensive platform that enables developers to convert 
 ## 🏗 Architecture
 
 ```
-/app
-├── backend/           # FastAPI Python backend
-│   ├── server.py      # Main API server
-│   └── .env           # Environment variables
-├── frontend/          # React frontend
-│   ├── src/
-│   │   ├── pages/     # App pages (Dashboard, Projects, Builds, etc.)
-│   │   ├── components/# Reusable UI components
-│   │   ├── context/   # React context (Auth)
-│   │   └── lib/       # API utilities
-│   └── .env           # Frontend environment
-└── docs/              # Documentation
+nativify-web/
+├── src/                # Next.js 14 App Router (frontend)
+│   ├── app/            # Pages et routes (App Router)
+│   ├── components/      # Composants UI réutilisables
+│   ├── context/        # React Context (Auth)
+│   └── lib/            # Utilitaires (API, Supabase)
+├── backend/            # FastAPI Python backend
+│   ├── main.py         # Point d'entrée API
+│   └── requirements.txt
+├── docs/               # Documentation
+└── tests/              # Tests Python
 ```
 
 ## ✨ Features
@@ -35,9 +34,9 @@ NativiWeb Studio is a comprehensive platform that enables developers to convert 
 
 ## 🛠 Tech Stack
 
-- **Frontend**: React 19, Tailwind CSS, Shadcn/UI, React Router
+- **Frontend**: Next.js 14 (App Router), TypeScript, Tailwind CSS, Shadcn/UI
 - **Backend**: FastAPI (Python), MongoDB (Motor async driver)
-- **Authentication**: Token-based auth with Supabase-ready structure
+- **Authentication**: Supabase Auth
 - **Styling**: Custom Neon Tech theme with cyan/violet accents
 
 ## 🚀 Getting Started
@@ -50,41 +49,69 @@ NativiWeb Studio is a comprehensive platform that enables developers to convert 
 
 ### Installation
 
-1. **Backend Setup**
+1. **Installer les dépendances frontend**
+```bash
+npm install
+```
+
+2. **Installer les dépendances backend**
 ```bash
 cd backend
 pip install -r requirements.txt
+cd ..
 ```
 
-2. **Frontend Setup**
+3. **Configuration des variables d'environnement**
+
+⚠️ **IMPORTANT** : Vous devez créer un fichier `.env.local` à la racine du projet avant de lancer l'application.
+
+Copiez le fichier `env.example` vers `.env.local` :
 ```bash
-cd frontend
-yarn install
+copy env.example .env.local
+# ou sur Linux/Mac:
+cp env.example .env.local
 ```
 
-3. **Environment Variables**
-
-Backend `.env`:
+Puis éditez `.env.local` et remplacez les valeurs par vos propres credentials Supabase :
+```env
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
 ```
+
+**Où trouver vos credentials Supabase ?**
+1. Allez sur https://supabase.com/dashboard
+2. Sélectionnez votre projet
+3. Allez dans Settings > API
+4. Copiez l'URL du projet et la clé `anon` `public`
+
+Créer un fichier `backend/.env` pour le backend :
+```env
+SUPABASE_URL=your_supabase_url
+SUPABASE_ANON_KEY=your_supabase_anon_key
 MONGO_URL=mongodb://localhost:27017
 DB_NAME=nativiweb_studio
 ```
 
-Frontend `.env`:
-```
-REACT_APP_BACKEND_URL=http://localhost:8001
-```
-
 ### Running the Application
 
+**✨ Méthode Simplifiée (Recommandée) - Un seul terminal :**
 ```bash
-# Start backend
-cd backend
-uvicorn server:app --reload --port 8001
+npm run dev
+```
+Cette commande démarre automatiquement :
+- Frontend (Next.js) sur http://localhost:3000
+- Backend (FastAPI) sur http://localhost:8000
 
-# Start frontend (in another terminal)
-cd frontend
-yarn start
+Les logs sont préfixés avec `[frontend]` et `[backend]` pour faciliter la distinction.
+
+**🔧 Méthode Alternative - Deux terminaux séparés :**
+```bash
+# Terminal 1 - Frontend
+npm run dev:frontend
+
+# Terminal 2 - Backend
+npm run dev:backend
 ```
 
 ## 📱 Supported Native Features
