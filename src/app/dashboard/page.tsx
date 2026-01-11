@@ -8,6 +8,7 @@ import { DashboardLayout } from '@/components/layout/DashboardLayout'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { statsApi, projectsApi, buildsApi } from '@/lib/api'
+import { logger } from '@/lib/logger'
 import { 
   FolderKanban, 
   Hammer, 
@@ -68,7 +69,7 @@ export default function DashboardPage() {
       setProjects(projectsData.slice(0, 3))
       setRecentBuilds(buildsData.slice(0, 5))
     } catch (error) {
-      console.error('Failed to fetch dashboard data:', error)
+      logger.error('Failed to fetch dashboard data', error, { userId: user?.id })
     } finally {
       setLoading(false)
     }

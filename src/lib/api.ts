@@ -1,7 +1,13 @@
 import axios from 'axios';
 import { createClient } from './supabase';
+import { apiCache } from './api-cache';
+import { logger } from './logger';
 
-const API_URL = (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000') + '/api';
+// In development, use relative URL (proxied by Next.js)
+// In production, use absolute URL from env variable
+const API_URL = process.env.NODE_ENV === 'production' 
+  ? (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000') + '/api'
+  : '/api';
 
 // Create axios instance with interceptor to add auth token
 const apiClient = axios.create({
@@ -17,7 +23,7 @@ apiClient.interceptors.request.use(
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       
       if (sessionError) {
-        console.error('[API] Error getting session:', sessionError);
+        logger.error('[API] Error getting session', sessionError, { url: config.url });
         // Ne pas bloquer la requête, continuer sans token
         return config;
       }
@@ -25,10 +31,10 @@ apiClient.interceptors.request.use(
       if (session?.access_token) {
         config.headers.Authorization = `Bearer ${session.access_token}`;
       } else {
-        console.warn('[API] No access token found in session');
+        logger.debug('[API] No access token found in session', { url: config.url });
       }
     } catch (error) {
-      console.error('[API] Failed to get session in interceptor:', error);
+      logger.error('[API] Failed to get session in interceptor', error, { url: config.url });
       // Ne pas bloquer la requête en cas d'erreur
     }
     return config;
@@ -44,8 +50,10 @@ apiClient.interceptors.response.use(
   async (error) => {
     // Gérer les erreurs de connexion
     if (error.code === 'ECONNREFUSED' || error.message?.includes('Network Error') || error.message?.includes('ERR_CONNECTION_REFUSED')) {
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
-      console.warn(`[API] Backend non disponible sur ${backendUrl}`);
+      const backendUrl = typeof window !== 'undefined' && process.env.NODE_ENV === 'production'
+        ? (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000')
+        : 'http://localhost:8000';
+      logger.warn('[API] Backend non disponible', { backendUrl, url: error.config?.url });
       
       const customError = new Error('Le serveur backend n\'est pas disponible. Veuillez démarrer le serveur avec: npm run dev');
       (customError as any).isConnectionError = true;
@@ -55,8 +63,9 @@ apiClient.interceptors.response.use(
     
     // Gérer les erreurs 401 (Unauthorized) - NE PAS déconnecter automatiquement
     if (error.response?.status === 401) {
-      console.warn('[API] Unauthorized request (401):', {
+      logger.warn('[API] Unauthorized request', {
         url: error.config?.url,
+        status: 401,
         message: error.response?.data?.detail || 'Unauthorized'
       });
       
@@ -66,8 +75,9 @@ apiClient.interceptors.response.use(
     
     // Gérer les erreurs 403 (Forbidden)
     if (error.response?.status === 403) {
-      console.warn('[API] Forbidden request (403):', {
+      logger.warn('[API] Forbidden request', {
         url: error.config?.url,
+        status: 403,
         message: error.response?.data?.detail || 'Forbidden'
       });
     }
@@ -76,30 +86,80 @@ apiClient.interceptors.response.use(
   }
 );
 
-// Projects API
+// Projects API avec cache pour améliorer les performances
 export const projectsApi = {
-  getAll: async () => {
+  getAll: async (useCache: boolean = true) => {
+    const cacheKey = 'projects:all';
+    
+    // Vérifier le cache
+    if (useCache) {
+      const cached = apiCache.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
+    }
+    
     const response = await apiClient.get('/projects');
-    return response.data;
+    const data = response.data;
+    
+    // Mettre en cache (TTL: 2 minutes)
+    if (useCache) {
+      apiCache.set(cacheKey, data, 2 * 60 * 1000);
+    }
+    
+    return data;
   },
   
-  getOne: async (projectId: string) => {
+  getOne: async (projectId: string, useCache: boolean = true) => {
+    const cacheKey = `projects:${projectId}`;
+    
+    // Vérifier le cache
+    if (useCache) {
+      const cached = apiCache.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
+    }
+    
     const response = await apiClient.get(`/projects/${projectId}`);
-    return response.data;
+    const data = response.data;
+    
+    // Mettre en cache (TTL: 3 minutes)
+    if (useCache) {
+      apiCache.set(cacheKey, data, 3 * 60 * 1000);
+    }
+    
+    return data;
   },
   
   create: async (data: any) => {
     const response = await apiClient.post('/projects', data);
-    return response.data;
+    const result = response.data;
+    
+    // Invalider le cache des projets
+    apiCache.invalidatePattern('projects:');
+    
+    return result;
   },
   
   update: async (projectId: string, data: any) => {
     const response = await apiClient.put(`/projects/${projectId}`, data);
-    return response.data;
+    const result = response.data;
+    
+    // Invalider le cache
+    apiCache.delete(`projects:${projectId}`);
+    apiCache.invalidatePattern('projects:');
+    
+    return result;
   },
   
   delete: async (projectId: string) => {
     const response = await apiClient.delete(`/projects/${projectId}`);
+    
+    // Invalider le cache
+    apiCache.delete(`projects:${projectId}`);
+    apiCache.invalidatePattern('projects:');
+    
     return response.data;
   },
 };
@@ -149,6 +209,18 @@ export const buildsApi = {
       }
       throw error;
     }
+  },
+  
+  delete: async (buildId: string) => {
+    const response = await apiClient.delete(`/builds/${buildId}`);
+    // Invalider le cache des builds si nécessaire
+    return response.data;
+  },
+  
+  deleteAll: async () => {
+    const response = await apiClient.delete('/builds');
+    // Invalider le cache des builds si nécessaire
+    return response.data;
   },
 };
 

@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
+import { logger } from '@/lib/logger'
 import { Zap, Github, Loader2 } from 'lucide-react'
 
 export default function RegisterPage() {
@@ -54,11 +55,10 @@ export default function RegisterPage() {
       } else {
         // Afficher un message d'erreur plus détaillé
         const errorMessage = error.message || error.response?.data?.detail || error.response?.data?.message || 'Registration failed'
-        console.error('Registration error details:', {
-          error,
-          message: error.message,
+        logger.error('Registration error', error, {
           response: error.response?.data,
-          status: error.response?.status
+          status: error.response?.status,
+          email
         })
         toast.error(errorMessage)
       }

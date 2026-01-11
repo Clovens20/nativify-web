@@ -58,25 +58,102 @@ load_dotenv(ROOT_DIR / '.env')
 
 # Environment
 ENVIRONMENT = os.environ.get('ENVIRONMENT', 'development')
+
+# Mode développement sans Supabase
+DEV_MODE = ENVIRONMENT == 'development' and not os.environ.get('SUPABASE_URL')
+if DEV_MODE:
+    logging.warning("⚠️ MODE DÉVELOPPEMENT : Supabase désactivé, authentification bypassée")
+
+# Stockage en mémoire pour les projets en mode DEV
+DEV_PROJECTS_STORE: Dict[str, Dict[str, Any]] = {}
+DEV_BUILDS_STORE: Dict[str, List[Dict[str, Any]]] = {}
+
+# Validate required environment variables
+REQUIRED_ENV_VARS = {
+    'production': ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY'],
+    'development': ['SUPABASE_URL', 'SUPABASE_ANON_KEY'],
+    'test': []  # Test environment uses mocks
+}
+
+missing_vars = []
+if ENVIRONMENT not in ['test']:
+    required = REQUIRED_ENV_VARS.get(ENVIRONMENT, REQUIRED_ENV_VARS['development'])
+    for var in required:
+        if not os.environ.get(var):
+            missing_vars.append(var)
+
+if missing_vars:
+    error_msg = f"Missing required environment variables: {', '.join(missing_vars)}"
+    logging.error(error_msg)
+    if ENVIRONMENT == 'production':
+        raise ValueError(error_msg)
+    else:
+        logging.warning(f"⚠️  {error_msg} - Application may not work correctly")
+
+# Initialize Sentry for error tracking (production only)
+SENTRY_DSN = os.environ.get('SENTRY_DSN')
+if SENTRY_DSN and ENVIRONMENT == 'production':
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.logging import LoggingIntegration
+        
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            integrations=[
+                FastApiIntegration(),
+                LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)
+            ],
+            traces_sample_rate=0.1,  # 10% of transactions
+            environment=ENVIRONMENT,
+            release=os.environ.get('RELEASE_VERSION', '1.0.0')
+        )
+        logging.info("Sentry error tracking initialized")
+    except ImportError:
+        logging.warning("Sentry SDK not installed - error tracking disabled")
+else:
+    if ENVIRONMENT == 'production' and not SENTRY_DSN:
+        logging.warning("⚠️  SENTRY_DSN not set - error tracking disabled in production")
+
 ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
 
 # Supabase connection
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
 SUPABASE_KEY = os.environ.get('SUPABASE_ANON_KEY', '')
 SUPABASE_SERVICE_KEY = os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Configure logging
-LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-    ]
-)
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+else:
+    supabase = None
+    if ENVIRONMENT != 'test':
+        logging.warning("⚠️  Supabase not configured - authentication will fail")
 
-def get_supabase_client(token: Optional[str] = None, use_service_role: bool = False) -> Client:
+# Configure structured logging
+LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
+LOG_FORMAT = os.environ.get('LOG_FORMAT', 'json' if ENVIRONMENT == 'production' else 'text')
+
+if LOG_FORMAT == 'json':
+    from pythonjsonlogger import jsonlogger
+    log_handler = logging.StreamHandler()
+    formatter = jsonlogger.JsonFormatter(
+        '%(asctime)s %(name)s %(levelname)s %(message)s %(pathname)s %(lineno)d'
+    )
+    log_handler.setFormatter(formatter)
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL),
+        handlers=[log_handler]
+    )
+else:
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler()]
+    )
+
+logger = logging.getLogger(__name__)
+
+def get_supabase_client(token: Optional[str] = None, use_service_role: bool = False) -> Optional[Client]:
     """Get Supabase client with optional user token for RLS
     
     Args:
@@ -84,38 +161,61 @@ def get_supabase_client(token: Optional[str] = None, use_service_role: bool = Fa
         use_service_role: If True, use service role key to bypass RLS (for backend operations)
     
     Returns:
-        Supabase client configured with appropriate credentials
+        Supabase client configured with appropriate credentials, or None if not available
     """
-    # Use service role key if requested (for backend operations that need to bypass RLS)
-    if use_service_role and SUPABASE_SERVICE_KEY:
-        return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    # En mode dev sans Supabase, retourner None
+    if DEV_MODE:
+        return None
     
-    # If token provided, create client and try to set it
-    # Note: Supabase Python client doesn't easily support per-request tokens
-    # For now, we'll use service role for operations that need RLS bypass
-    if token and not use_service_role:
-        # Create a new client instance
-        client = create_client(SUPABASE_URL, SUPABASE_KEY)
-        # Try to set auth headers manually
-        try:
-            # This is a workaround - the client will use anon key but we can
-            # use service role for operations that need it
-            pass
-        except:
-            pass
-        return client
+    # Si Supabase n'est pas configuré, retourner None
+    if not SUPABASE_URL:
+        return None
     
-    # Default: use service role if available, otherwise anon key
-    if SUPABASE_SERVICE_KEY:
-        return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    return supabase
+    try:
+        # Use service role key if requested (for backend operations that need to bypass RLS)
+        if use_service_role and SUPABASE_SERVICE_KEY:
+            return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+        
+        # If token provided, create client and try to set it
+        # Note: Supabase Python client doesn't easily support per-request tokens
+        # For now, we'll use service role for operations that need RLS bypass
+        if token and not use_service_role:
+            # Create a new client instance
+            client = create_client(SUPABASE_URL, SUPABASE_KEY)
+            # Try to set auth headers manually
+            try:
+                # This is a workaround - the client will use anon key but we can
+                # use service role for operations that need it
+                pass
+            except:
+                pass
+            return client
+        
+        # Default: use service role if available, otherwise anon key
+        if SUPABASE_SERVICE_KEY:
+            return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+        return supabase
+    except Exception as e:
+        logging.warning(f"Error creating Supabase client: {e}")
+        return None
 
 # Initialize rate limiter (must be before app creation)
-if HAS_SLOWAPI:
-    limiter = Limiter(key_func=get_remote_address)
+# Default rate limits: 100 requests per minute per IP
+RATE_LIMIT_ENABLED = os.environ.get('RATE_LIMIT_ENABLED', 'true').lower() == 'true'
+RATE_LIMIT_PER_MINUTE = int(os.environ.get('RATE_LIMIT_PER_MINUTE', '100'))
+
+if HAS_SLOWAPI and RATE_LIMIT_ENABLED:
+    limiter = Limiter(
+        key_func=get_remote_address,
+        default_limits=[f"{RATE_LIMIT_PER_MINUTE}/minute"]
+    )
+    logging.info(f"Rate limiting enabled: {RATE_LIMIT_PER_MINUTE} requests/minute")
 else:
     limiter = Limiter(key_func=get_remote_address)
-    logging.warning("slowapi not installed - rate limiting disabled")
+    if not HAS_SLOWAPI:
+        logging.warning("slowapi not installed - rate limiting disabled")
+    elif not RATE_LIMIT_ENABLED:
+        logging.warning("Rate limiting disabled via RATE_LIMIT_ENABLED=false")
 
 # Create the main app
 app = FastAPI(
@@ -378,6 +478,10 @@ security = HTTPBearer()
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
     """Extract user ID from JWT token without checking session existence"""
+    # Mode dev : bypass authentification
+    if DEV_MODE:
+        return "dev-user-123"
+    
     try:
         token = credentials.credentials
         
@@ -485,12 +589,19 @@ async def get_current_user_optional(authorization: Optional[str] = Header(None))
 
 @api_router.post("/auth/register")
 async def register(request: Request, user_data: UserCreate):
-    # Rate limiting
-    if HAS_SLOWAPI:
-        try:
-            limiter.check(f"/api/auth/register:POST:{get_remote_address(request)}", "10/minute")
-        except RateLimitExceeded:
-            raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
+    # Mode dev : retourner un utilisateur dev
+    if DEV_MODE:
+        return {
+            "token": "dev-token",
+            "user": {
+                "id": "dev-user-123",
+                "email": user_data.email,
+                "name": user_data.name,
+                "role": "user"
+            }
+        }
+    
+    # Rate limiting is handled globally by slowapi
     try:
         # Register with Supabase Auth
         auth_response = supabase.auth.sign_up({
@@ -538,12 +649,19 @@ async def register(request: Request, user_data: UserCreate):
 
 @api_router.post("/auth/login")
 async def login(request: Request, credentials: UserLogin):
-    # Rate limiting
-    if HAS_SLOWAPI:
-        try:
-            limiter.check(f"/api/auth/login:POST:{get_remote_address(request)}", "5/minute")
-        except RateLimitExceeded:
-            raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
+    # Mode dev : retourner un faux token
+    if DEV_MODE:
+        return {
+            "token": "dev-token",
+            "user": {
+                "id": "dev-user-123",
+                "email": credentials.email or "dev@local.com",
+                "name": "Dev User",
+                "role": "user"
+            }
+        }
+    
+    # Rate limiting is handled globally by slowapi
     try:
         auth_response = supabase.auth.sign_in_with_password({
             "email": credentials.email,
@@ -589,6 +707,15 @@ async def login(request: Request, credentials: UserLogin):
 
 @api_router.get("/auth/me")
 async def get_current_user_info(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    # Mode dev : retourner l'utilisateur dev
+    if DEV_MODE:
+        return {
+            "id": "dev-user-123",
+            "email": "dev@local.com",
+            "name": "Dev User",
+            "role": "user"
+        }
+    
     try:
         token = credentials.credentials
         user_response = supabase.auth.get_user(token)
@@ -639,6 +766,10 @@ async def get_current_user_info(credentials: HTTPAuthorizationCredentials = Depe
 
 @api_router.post("/auth/logout")
 async def logout(user_id: str = Depends(get_current_user)):
+    # Mode dev : retourner succès
+    if DEV_MODE:
+        return {"message": "Logged out successfully"}
+    
     try:
         supabase.auth.sign_out()
         return {"message": "Logged out successfully"}
@@ -647,8 +778,76 @@ async def logout(user_id: str = Depends(get_current_user)):
 
 # ==================== PROJECT ENDPOINTS ====================
 
+def normalize_web_url(url: str) -> str:
+    """Convertit une URL GitHub en URL web utilisable si nécessaire"""
+    if not url:
+        return url
+    
+    # Si c'est une URL GitHub, essayer de la convertir en GitHub Pages
+    if 'github.com' in url.lower():
+        # Format: https://github.com/username/repo
+        import re
+        match = re.search(r'github\.com/([^/]+)/([^/]+)', url)
+        if match:
+            username = match.group(1)
+            repo = match.group(2).replace('.git', '')
+            # Essayer GitHub Pages (username.github.io/repo ou repo.github.io)
+            # Pour l'instant, on retourne l'URL telle quelle et on log un avertissement
+            logging.warning(f"URL GitHub détectée: {url}. Assurez-vous que l'application web est déployée et accessible.")
+            # On pourrait aussi essayer: https://{username}.github.io/{repo} ou https://{repo}.github.io
+            # Mais pour l'instant, on laisse l'utilisateur fournir l'URL du site déployé
+            return url
+    
+    return url
+
 @api_router.post("/projects")
 async def create_project(project_data: ProjectCreate, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    # Normaliser l'URL web (convertir GitHub si nécessaire)
+    normalized_web_url = normalize_web_url(project_data.web_url)
+    
+    # Normaliser les features
+    if project_data.features:
+        features_raw = [f.model_dump() if hasattr(f, 'model_dump') else f for f in project_data.features]
+        # S'assurer que toutes les features ont 'id' et 'enabled'
+        features = []
+        for f in features_raw:
+            if isinstance(f, dict):
+                if 'id' not in f:
+                    continue  # Ignorer les features invalides
+                if 'enabled' not in f:
+                    f['enabled'] = False
+                features.append(f)
+            else:
+                # Si c'est un objet, essayer de le convertir
+                if hasattr(f, 'id'):
+                    features.append({
+                        'id': f.id,
+                        'enabled': getattr(f, 'enabled', False),
+                        'name': getattr(f, 'name', f.id),
+                        'config': getattr(f, 'config', {})
+                    })
+    else:
+        features = DEFAULT_FEATURES.copy()
+    
+    # Mode dev : retourner un projet factice
+    if DEV_MODE:
+        user_id = "dev-user-123"
+        project_id = str(uuid.uuid4())
+        project = {
+            "id": project_id,
+            "user_id": user_id,
+            "name": project_data.name,
+            "web_url": normalized_web_url,
+            "description": project_data.description or "",
+            "platform": project_data.platform,
+            "features": features,
+            "logo_url": project_data.logo_url,
+            "status": "draft",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        return project
+    
     try:
         # Get user info from token
         token = credentials.credentials
@@ -712,18 +911,12 @@ async def create_project(project_data: ProjectCreate, credentials: HTTPAuthoriza
         
         project_id = str(uuid.uuid4())
         
-        # Use features from project_data if provided, otherwise use default
-        if project_data.features:
-            # Convert NativeFeature objects to dicts
-            features = [f.model_dump() if hasattr(f, 'model_dump') else f for f in project_data.features]
-        else:
-            features = DEFAULT_FEATURES
-        
+        # Utiliser les features normalisées
         project = {
             "id": project_id,
             "user_id": user_id,
             "name": project_data.name,
-            "web_url": project_data.web_url,
+            "web_url": normalized_web_url,
             "description": project_data.description or "",
             "platform": project_data.platform,
             "features": features,
@@ -753,11 +946,27 @@ async def create_project(project_data: ProjectCreate, credentials: HTTPAuthoriza
 
 @api_router.get("/projects")
 async def get_projects(user_id: str = Depends(get_current_user)):
+    # Mode dev : retourner les projets stockés en mémoire
+    if DEV_MODE:
+        projects = list(DEV_PROJECTS_STORE.values())
+        # Filtrer par user_id si nécessaire (en mode dev, on retourne tous les projets)
+        logging.info(f"📋 Retour de {len(projects)} projets en mode DEV")
+        return projects
+    
     response = supabase.table("projects").select("*").eq("user_id", user_id).execute()
     return response.data or []
 
 @api_router.get("/projects/{project_id}")
 async def get_project(project_id: str, user_id: str = Depends(get_current_user)):
+    # Mode dev : retourner le projet stocké en mémoire
+    if DEV_MODE:
+        if project_id in DEV_PROJECTS_STORE:
+            project = DEV_PROJECTS_STORE[project_id]
+            logging.info(f"📦 Projet récupéré en mode DEV: {project_id} - URL: {project.get('web_url')}")
+            return project
+        else:
+            raise HTTPException(status_code=404, detail="Project not found")
+    
     # Utiliser le service role client pour éviter les problèmes RLS
     client = get_supabase_client(use_service_role=True)
     response = client.table("projects").select("*").eq("id", project_id).eq("user_id", user_id).execute()
@@ -770,6 +979,47 @@ async def get_project(project_id: str, user_id: str = Depends(get_current_user))
 
 @api_router.put("/projects/{project_id}")
 async def update_project(project_id: str, update_data: ProjectUpdate, user_id: str = Depends(get_current_user)):
+    # Mode dev : mettre à jour le projet en mémoire
+    if DEV_MODE:
+        if project_id not in DEV_PROJECTS_STORE:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        project = DEV_PROJECTS_STORE[project_id]
+        update_dict = {k: v for k, v in update_data.model_dump().items() if v is not None}
+        
+        # Normaliser l'URL si elle est mise à jour
+        if 'web_url' in update_dict:
+            update_dict['web_url'] = normalize_web_url(update_dict['web_url'])
+        
+        # Normaliser les features si elles sont mises à jour
+        if 'features' in update_dict:
+            features_raw = update_dict['features']
+            if isinstance(features_raw, list):
+                normalized_features = []
+                for f in features_raw:
+                    if isinstance(f, dict):
+                        if 'id' not in f:
+                            continue
+                        if 'enabled' not in f:
+                            f['enabled'] = False
+                        normalized_features.append(f)
+                    elif hasattr(f, 'id'):
+                        normalized_features.append({
+                            'id': f.id,
+                            'enabled': getattr(f, 'enabled', False),
+                            'name': getattr(f, 'name', f.id),
+                            'config': getattr(f, 'config', {})
+                        })
+                update_dict['features'] = normalized_features
+        
+        # Mettre à jour le projet
+        project.update(update_dict)
+        project['updated_at'] = datetime.now(timezone.utc).isoformat()
+        DEV_PROJECTS_STORE[project_id] = project
+        
+        logging.info(f"📝 Projet mis à jour en mode DEV: {project_id} - URL: {project.get('web_url')}")
+        return project
+    
     # Check project exists
     existing = supabase.table("projects").select("*").eq("id", project_id).eq("user_id", user_id).single().execute()
     if not existing.data:
@@ -787,6 +1037,15 @@ async def update_project(project_id: str, update_data: ProjectUpdate, user_id: s
 
 @api_router.delete("/projects/{project_id}")
 async def delete_project(project_id: str, user_id: str = Depends(get_current_user)):
+    # Mode dev : supprimer le projet de la mémoire
+    if DEV_MODE:
+        if project_id in DEV_PROJECTS_STORE:
+            del DEV_PROJECTS_STORE[project_id]
+            if project_id in DEV_BUILDS_STORE:
+                del DEV_BUILDS_STORE[project_id]
+            logging.info(f"🗑️ Projet supprimé en mode DEV: {project_id}")
+        return {"message": "Project deleted"}
+    
     result = supabase.table("projects").delete().eq("id", project_id).eq("user_id", user_id).execute()
     await log_system_event("info", "project", f"Project deleted: {project_id}", user_id=user_id)
     return {"message": "Project deleted"}
@@ -795,6 +1054,45 @@ async def delete_project(project_id: str, user_id: str = Depends(get_current_use
 
 @api_router.post("/builds")
 async def create_build(build_data: BuildCreate, background_tasks: BackgroundTasks, user_id: str = Depends(get_current_user)):
+    # Mode dev : créer un build et le stocker en mémoire
+    if DEV_MODE:
+        # Récupérer le projet depuis le store
+        project = DEV_PROJECTS_STORE.get(build_data.project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        build_id = str(uuid.uuid4())
+        build = {
+            "id": build_id,
+            "project_id": build_data.project_id,
+            "user_id": user_id,
+            "platform": build_data.platform,
+            "build_type": build_data.build_type or "debug",
+            "build_config": {},
+            "certificate_id": build_data.certificate_id,
+            "status": "processing",
+            "phase": "queued",
+            "progress": 0,
+            "logs": [{"level": "info", "message": f"Build queued (dev mode)", "timestamp": datetime.now(timezone.utc).isoformat()}],
+            "artifacts": [],
+            "download_url": None,
+            "error_message": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": None,
+            "completed_at": None,
+            "duration_seconds": None
+        }
+        
+        # Stocker le build en mémoire
+        if build_data.project_id not in DEV_BUILDS_STORE:
+            DEV_BUILDS_STORE[build_data.project_id] = []
+        DEV_BUILDS_STORE[build_data.project_id].append(build)
+        
+        # Traiter le build en arrière-plan avec les vraies données du projet
+        background_tasks.add_task(process_build, build_id, project)
+        logging.info(f"🔨 Build créé en mode DEV: {build_id} pour projet {build_data.project_id} - URL: {project.get('web_url')}")
+        return build
+    
     # Utiliser le service role client pour éviter les problèmes RLS
     client = get_supabase_client(use_service_role=True)
     
@@ -841,7 +1139,113 @@ async def create_build(build_data: BuildCreate, background_tasks: BackgroundTask
     return result.data[0] if result.data else build
 
 async def process_build(build_id: str, project: dict):
-    """Process build with detailed phases"""
+    """Process build with detailed phases - Compile réellement l'APK pour Android"""
+    # Mode dev : générer réellement le projet et compiler l'APK si possible
+    if DEV_MODE:
+        # Trouver le build dans le store et le mettre à jour
+        build_in_store = None
+        project_id = project.get('id')
+        if project_id and project_id in DEV_BUILDS_STORE:
+            for build in DEV_BUILDS_STORE[project_id]:
+                if build.get('id') == build_id:
+                    build_in_store = build
+                    break
+        
+        if not build_in_store:
+            logging.warning(f"Build {build_id} not found in DEV_BUILDS_STORE")
+            return
+        
+        logging.info(f"🔨 Mode dev : Traitement du build {build_id}")
+        platform = project.get('platform', 'android')
+        project_name = project.get('name', 'MyApp')
+        web_url = project.get('web_url', '')
+        features = project.get('features', DEFAULT_FEATURES.copy())
+        
+        # S'assurer que les features sont au bon format
+        if not features or len(features) == 0:
+            features = DEFAULT_FEATURES.copy()
+        elif isinstance(features, list) and len(features) > 0:
+            # Vérifier le format des features
+            if not isinstance(features[0], dict) or 'id' not in features[0]:
+                # Si les features ne sont pas au bon format, utiliser les defaults
+                features = DEFAULT_FEATURES.copy()
+        
+        # Mettre à jour le build dans le store
+        build_in_store['status'] = 'processing'
+        build_in_store['started_at'] = datetime.now(timezone.utc).isoformat()
+        
+        # Simuler les phases du build
+        phases = BUILD_PHASES.get(platform, BUILD_PHASES['android'])
+        total_duration = sum(p['duration'] for p in phases)
+        current_progress = 0
+        
+        for phase_info in phases:
+            phase = phase_info['phase']
+            duration = phase_info['duration']
+            logging.info(f"Phase: {phase} ({duration}s)")
+            
+            # Mettre à jour le build dans le store
+            build_in_store['phase'] = phase
+            build_in_store['progress'] = min(int(current_progress), 99)
+            
+            # À la phase "assembling" pour Android, essayer de compiler réellement l'APK
+            if platform == 'android' and phase == 'assembling' and GENERATOR_AVAILABLE:
+                try:
+                    logging.info(f"🔨 Phase d'assemblage: Génération et compilation réelle de l'APK pour {project_name}...")
+                    
+                    safe_name = "".join(c.lower() if c.isalnum() else '' for c in project_name)
+                    package_name = f"com.nativiweb.{safe_name}" if safe_name else "com.nativiweb.app"
+                    
+                    project_zip = generator.generate_android_project(
+                        project_name=project_name,
+                        package_name=package_name,
+                        web_url=web_url,
+                        features=features,
+                        app_icon_url=project.get('logo_url')
+                    )
+                    
+                    # Importer et utiliser le builder Android
+                    try:
+                        from android_builder import AndroidBuilder
+                        builder = AndroidBuilder()
+                        
+                        # Compiler l'APK (synchroniser car c'est une opération bloquante)
+                        import concurrent.futures
+                        loop = asyncio.get_event_loop()
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            success, apk_bytes, error_msg = await loop.run_in_executor(
+                                executor, 
+                                builder.build_apk, 
+                                project_zip, 
+                                project_name
+                            )
+                        
+                        if success and apk_bytes:
+                            logging.info(f"✅ APK compilé avec succès en mode dev! Taille: {len(apk_bytes) / 1024 / 1024:.2f} MB")
+                        else:
+                            logging.warning(f"⚠️ Compilation échouée en mode dev: {error_msg[:200] if error_msg else 'Erreur inconnue'}")
+                    except ImportError:
+                        logging.warning("AndroidBuilder non disponible en mode dev - le projet source sera fourni")
+                    except Exception as build_error:
+                        logging.error(f"Erreur lors du build Android en mode dev: {build_error}", exc_info=True)
+                except Exception as gen_error:
+                    logging.error(f"Erreur lors de la génération du projet en mode dev: {gen_error}", exc_info=True)
+            
+            current_progress += (100 / total_duration)
+            if duration > 0:
+                await asyncio.sleep(min(duration * 0.1, 1))  # Accélérer en mode dev
+        
+        # Finaliser le build
+        build_in_store['status'] = 'completed'
+        build_in_store['phase'] = 'completed'
+        build_in_store['progress'] = 100
+        build_in_store['completed_at'] = datetime.now(timezone.utc).isoformat()
+        build_in_store['artifacts'] = [{"name": f"{project_name}-debug.apk", "type": "apk", "size": "varies"}]
+        build_in_store['download_url'] = f"/api/builds/{build_id}/download"
+        
+        logging.info(f"✅ Build {build_id} terminé (mode dev)")
+        return
+    
     # Utiliser le service role client pour éviter les problèmes RLS
     client = get_supabase_client(use_service_role=True)
     
@@ -852,9 +1256,12 @@ async def process_build(build_id: str, project: dict):
     
     build_data = build_response.data[0]
     platform = build_data['platform']
+    build_type = build_data.get('build_type', 'debug')
     phases = BUILD_PHASES.get(platform, BUILD_PHASES['android'])
     total_duration = sum(p['duration'] for p in phases)
     current_progress = 0
+    apk_compiled = False
+    apk_size = 0
     
     client.table("builds").update({
         "started_at": datetime.now(timezone.utc).isoformat()
@@ -875,22 +1282,92 @@ async def process_build(build_id: str, project: dict):
             "logs": current_logs
         }).eq("id", build_id).execute()
         
+        # Si on est à la phase "assembling" pour Android, compiler réellement l'APK
+        if platform == 'android' and phase == 'assembling' and GENERATOR_AVAILABLE:
+            try:
+                logging.info(f"🔨 Phase d'assemblage: Compilation réelle de l'APK pour {project['name']}...")
+                
+                # Générer le projet source
+                project_name = project.get('name', 'MyApp')
+                web_url = project.get('web_url', '')
+                features = project.get('features', [])
+                safe_name = "".join(c.lower() if c.isalnum() else '' for c in project_name)
+                package_name = f"com.nativiweb.{safe_name}" if safe_name else "com.nativiweb.app"
+                
+                project_zip = generator.generate_android_project(
+                    project_name=project_name,
+                    package_name=package_name,
+                    web_url=web_url,
+                    features=features,
+                    app_icon_url=project.get('logo_url')
+                )
+                
+                # Importer et utiliser le builder Android
+                try:
+                    from android_builder import AndroidBuilder
+                    builder = AndroidBuilder()
+                    
+                    # Compiler l'APK (synchroniser car c'est une opération bloquante)
+                    # On utilise run_in_executor pour ne pas bloquer l'event loop
+                    import concurrent.futures
+                    loop = asyncio.get_event_loop()
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        success, apk_bytes, error_msg = await loop.run_in_executor(
+                            executor, 
+                            builder.build_apk, 
+                            project_zip, 
+                            project_name
+                        )
+                    
+                    if success and apk_bytes:
+                        apk_compiled = True
+                        apk_size = len(apk_bytes)
+                        logging.info(f"✅ APK compilé avec succès! Taille: {apk_size / 1024 / 1024:.2f} MB")
+                        
+                        # Stocker l'APK dans un fichier temporaire ou en mémoire pour le téléchargement
+                        # Pour l'instant, on le stockera dans la base de données comme indication
+                        # L'APK sera recompilé au téléchargement (ou on peut le stocker sur disque/S3)
+                        current_logs.append({
+                            "level": "success",
+                            "message": f"APK compilé avec succès! Taille: {apk_size / 1024 / 1024:.2f} MB",
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        })
+                    else:
+                        logging.warning(f"⚠️ Compilation échouée: {error_msg[:200] if error_msg else 'Erreur inconnue'}")
+                        current_logs.append({
+                            "level": "warning",
+                            "message": f"Compilation échouée: {error_msg[:200] if error_msg else 'Erreur inconnue'}. Le projet source sera fourni.",
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        })
+                except ImportError:
+                    logging.warning("AndroidBuilder non disponible - le projet source sera fourni")
+                except Exception as build_error:
+                    logging.error(f"Erreur lors du build Android: {build_error}", exc_info=True)
+            except Exception as gen_error:
+                logging.error(f"Erreur lors de la génération du projet: {gen_error}", exc_info=True)
+        
         if duration > 0:
             steps = max(1, duration)
             for _ in range(steps):
                 await asyncio.sleep(0.5)
                 current_progress += (100 / total_duration) / 2
                 client.table("builds").update({
-                    "progress": min(int(current_progress), 99)
+                    "progress": min(int(current_progress), 99),
+                    "logs": current_logs
                 }).eq("id", build_id).execute()
     
     # Generate artifacts
     artifacts = []
     if platform == 'android':
-        artifacts = [
-            {"name": f"{project['name']}-debug.apk", "type": "apk", "size": f"{random.randint(15, 30)}MB"},
-            {"name": f"{project['name']}-release.aab", "type": "aab", "size": f"{random.randint(12, 25)}MB"},
-        ]
+        if apk_compiled:
+            artifacts = [
+                {"name": f"{project['name']}-debug.apk", "type": "apk", "size": f"{apk_size / 1024 / 1024:.1f}MB", "compiled": True},
+            ]
+        else:
+            artifacts = [
+                {"name": f"{project['name']}-source.zip", "type": "zip", "size": "varies", "compiled": False},
+                {"name": f"{project['name']}-debug.apk", "type": "apk", "size": "N/A (source project)", "compiled": False},
+            ]
     else:
         artifacts = [
             {"name": f"{project['name']}.ipa", "type": "ipa", "size": f"{random.randint(20, 40)}MB"},
@@ -913,10 +1390,36 @@ async def process_build(build_id: str, project: dict):
         "duration_seconds": duration,
         "download_url": f"/api/builds/{build_id}/download"
     }).eq("id", build_id).execute()
+    
+    if apk_compiled:
+        logging.info(f"✅ Build {build_id} terminé avec APK compilé! Taille: {apk_size / 1024 / 1024:.2f} MB")
+    else:
+        logging.info(f"✅ Build {build_id} terminé (projet source fourni)")
 
 @api_router.get("/builds")
 async def get_builds(user_id: str = Depends(get_current_user), project_id: Optional[str] = None):
+    # Mode dev : retourner une liste de builds factices
+    if DEV_MODE:
+        return [
+            {
+                "id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "project_id": project_id or str(uuid.uuid4()),
+                "platform": "android",
+                "build_type": "debug",
+                "status": "completed",
+                "phase": "completed",
+                "progress": 100,
+                "artifacts": [{"name": "app-debug.apk", "type": "apk", "size": "15MB"}],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat()
+            }
+        ]
+    
     client = get_supabase_client(use_service_role=True)
+    if not client:
+        raise HTTPException(status_code=500, detail="Database connection not available")
+    
     query = client.table("builds").select("*").eq("user_id", user_id)
     if project_id:
         query = query.eq("project_id", project_id)
@@ -925,15 +1428,127 @@ async def get_builds(user_id: str = Depends(get_current_user), project_id: Optio
 
 @api_router.get("/builds/{build_id}")
 async def get_build(build_id: str, user_id: str = Depends(get_current_user)):
+    # Mode dev : retourner le build depuis le store
+    if DEV_MODE:
+        # Chercher le build dans tous les projets
+        for project_builds in DEV_BUILDS_STORE.values():
+            for build in project_builds:
+                if build.get('id') == build_id:
+                    return build
+        raise HTTPException(status_code=404, detail="Build not found")
+    
     client = get_supabase_client(use_service_role=True)
+    if not client:
+        raise HTTPException(status_code=500, detail="Database connection not available")
+    
     response = client.table("builds").select("*").eq("id", build_id).eq("user_id", user_id).execute()
     if not response.data or len(response.data) == 0:
         raise HTTPException(status_code=404, detail="Build not found")
     return response.data[0]
 
+@api_router.delete("/builds/{build_id}")
+async def delete_build(build_id: str, user_id: str = Depends(get_current_user)):
+    """Delete a build"""
+    # Mode dev : retourner un succès sans accéder à Supabase
+    if DEV_MODE:
+        logging.info(f"DEV_MODE: Build {build_id} deleted (simulated)")
+        return {"message": "Build deleted successfully"}
+    
+    try:
+        client = get_supabase_client(use_service_role=True)
+        
+        if not client:
+            raise HTTPException(status_code=500, detail="Database connection not available")
+        
+        # Vérifier que le build existe et appartient à l'utilisateur
+        build_response = client.table("builds").select("*").eq("id", build_id).eq("user_id", user_id).execute()
+        
+        if not build_response.data or len(build_response.data) == 0:
+            raise HTTPException(status_code=404, detail="Build not found")
+        
+        # Supprimer le build
+        client.table("builds").delete().eq("id", build_id).execute()
+        
+        await log_system_event("info", "build", f"Build deleted: {build_id}", user_id=user_id)
+        
+        return {"message": "Build deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error deleting build {build_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error deleting build: {str(e)}")
+
+@api_router.delete("/builds")
+async def delete_all_builds(user_id: str = Depends(get_current_user)):
+    """Delete all builds for the current user"""
+    # Mode dev : retourner un succès sans accéder à Supabase
+    if DEV_MODE:
+        # En mode dev, on retourne le nombre de builds mock (1 build selon get_builds)
+        build_count = 1
+        logging.info(f"DEV_MODE: All builds deleted (simulated, {build_count} builds)")
+        return {"message": f"All builds deleted successfully", "deleted_count": build_count}
+    
+    try:
+        client = get_supabase_client(use_service_role=True)
+        
+        if not client:
+            raise HTTPException(status_code=500, detail="Database connection not available")
+        
+        # Récupérer tous les builds de l'utilisateur pour logging
+        builds_response = client.table("builds").select("id").eq("user_id", user_id).execute()
+        build_count = len(builds_response.data) if builds_response.data else 0
+        
+        # Supprimer tous les builds de l'utilisateur
+        client.table("builds").delete().eq("user_id", user_id).execute()
+        
+        await log_system_event("info", "build", f"All builds deleted for user ({build_count} builds)", user_id=user_id)
+        
+        return {"message": f"All builds deleted successfully", "deleted_count": build_count}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error deleting all builds for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error deleting builds: {str(e)}")
+
 @api_router.get("/builds/{build_id}/download")
 async def download_build(build_id: str, user_id: str = Depends(get_current_user)):
-    """Download build artifact (APK/IPA)"""
+    """Download build artifact (APK/IPA) - Compile réellement l'APK pour Android"""
+    # Mode dev : générer un projet source factice
+    if DEV_MODE:
+        logging.info(f"Mode dev : Génération d'un projet source pour build {build_id}")
+        try:
+            # Générer un projet Android factice
+            project_name = "Dev Project"
+            web_url = "https://example.com"
+            features = []
+            safe_name = "devproject"
+            package_name = f"com.nativiweb.{safe_name}"
+            
+            if GENERATOR_AVAILABLE:
+                project_zip = generator.generate_android_project(
+                    project_name=project_name,
+                    package_name=package_name,
+                    web_url=web_url,
+                    features=features
+                )
+            else:
+                # Créer un ZIP vide si le générateur n'est pas disponible
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    zip_file.writestr("README.txt", "Dev mode - Project source")
+                project_zip = zip_buffer.getvalue()
+            
+            return StreamingResponse(
+                io.BytesIO(project_zip),
+                media_type="application/zip",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{project_name}-source.zip"'
+                }
+            )
+        except Exception as e:
+            logging.error(f"Error generating dev project: {e}")
+            raise HTTPException(status_code=500, detail=f"Error generating project: {str(e)}")
+    
     try:
         logging.info(f"Download request for build {build_id} by user {user_id}")
         
@@ -962,9 +1577,92 @@ async def download_build(build_id: str, user_id: str = Depends(get_current_user)
         
         project = project_response.data[0]
         platform = build['platform']
+        project_name = project.get('name', 'MyApp')
         
-        # Créer un fichier ZIP avec les artefacts du build
-        # Essayer de générer un vrai projet natif si le générateur est disponible
+        # Pour Android, essayer de compiler réellement l'APK
+        if platform == 'android' and GENERATOR_AVAILABLE:
+            try:
+                # Importer le builder Android
+                try:
+                    from android_builder import AndroidBuilder
+                    builder = AndroidBuilder()
+                    
+                    # Générer le projet source
+                    web_url = project.get('web_url', '')
+                    features = project.get('features', [])
+                    safe_name = "".join(c.lower() if c.isalnum() else '' for c in project_name)
+                    package_name = f"com.nativiweb.{safe_name}" if safe_name else "com.nativiweb.app"
+                    
+                    project_zip = generator.generate_android_project(
+                        project_name=project_name,
+                        package_name=package_name,
+                        web_url=web_url,
+                        features=features,
+                        app_icon_url=project.get('logo_url')
+                    )
+                    
+                    # Compiler réellement l'APK
+                    logging.info(f"🚀 Démarrage de la compilation de l'APK Android pour {project_name}...")
+                    
+                    try:
+                        success, apk_bytes, error_msg = builder.build_apk(project_zip, project_name)
+                        
+                        if success and apk_bytes:
+                            # Vérifier que l'APK est valide (au moins 1KB)
+                            if len(apk_bytes) < 1000:
+                                raise Exception(f"APK trop petit ({len(apk_bytes)} bytes), probablement corrompu")
+                            
+                            logging.info(f"✅ APK compilé avec succès pour {project_name}!")
+                            logging.info(f"📦 Taille de l'APK: {len(apk_bytes) / 1024 / 1024:.2f} MB")
+                            logging.info(f"📱 APK prêt à être installé sur un appareil Android")
+                            
+                            # Mettre à jour le build dans la base de données pour indiquer que c'est un APK compilé
+                            try:
+                                client.table("builds").update({
+                                    "download_url": f"/api/builds/{build_id}/download",
+                                    "status": "completed",
+                                    "phase": "completed"
+                                }).eq("id", build_id).execute()
+                            except Exception as db_error:
+                                logging.warning(f"Erreur lors de la mise à jour du build: {db_error}")
+                            
+                            # Retourner l'APK compilé directement
+                            safe_project_name = "".join(c for c in project_name if c.isalnum() or c in (' ', '-', '_')).strip()
+                            filename = f"{safe_project_name}-debug-{build_id[:8]}.apk"
+                            
+                            return StreamingResponse(
+                                io.BytesIO(apk_bytes),
+                                media_type="application/vnd.android.package-archive",
+                                headers={
+                                    "Content-Disposition": f'attachment; filename="{filename}"',
+                                    "Content-Type": "application/vnd.android.package-archive",
+                                    "Content-Length": str(len(apk_bytes)),
+                                    "X-Build-Type": "compiled-apk",
+                                    "X-APK-Size": str(len(apk_bytes))
+                                }
+                            )
+                        else:
+                            # Si la compilation échoue, logger l'erreur et retourner le projet source
+                            error_detail = error_msg[:500] if error_msg else "Erreur inconnue"
+                            logging.warning(f"⚠️ Compilation échouée pour {project_name}: {error_detail}")
+                            logging.warning(f"📦 Retour du projet source à la place de l'APK compilé")
+                            # Continuer avec le code suivant pour retourner le ZIP source
+                            
+                    except Exception as build_exception:
+                        logging.error(f"❌ Exception lors du build Android: {build_exception}", exc_info=True)
+                        # Continuer avec le code suivant pour retourner le ZIP source
+                        
+                except ImportError as import_error:
+                    logging.warning(f"AndroidBuilder non disponible: {import_error}. Retour du projet source.")
+                    # Continuer avec le code suivant pour retourner le ZIP source
+                except Exception as build_error:
+                    logging.error(f"Erreur lors du build Android: {build_error}", exc_info=True)
+                    # Continuer avec le code suivant pour retourner le ZIP source
+            except Exception as gen_error:
+                logging.error(f"Erreur lors de la génération du projet: {gen_error}", exc_info=True)
+                # Continuer avec le fallback
+        
+        # Générer un projet source (pour iOS ou si la compilation Android a échoué)
         if GENERATOR_AVAILABLE:
             try:
                 project_name = project.get('name', 'MyApp')
@@ -1000,7 +1698,40 @@ async def download_build(build_id: str, user_id: str = Depends(get_current_user)
                             zip_file.writestr(item.filename, temp_zip.read(item.filename))
                     
                     # Ajouter les métadonnées du build
-                    readme = f"# {project['name']} - {platform.upper()} Build\nGenerated by NativiWeb Studio\n\nBuild ID: {build_id}\nProject: {project['name']}\nPlatform: {platform}\nStatus: {build.get('status', 'unknown')}\n\n## 📦 Projet Natif Complet\n\nCe fichier contient un projet natif {platform.upper()} complet et fonctionnel, prêt à être compilé avec {'Android Studio' if platform == 'android' else 'Xcode'}.\n\nConsultez le README.md dans le projet pour les instructions de compilation."
+                    readme = f"""# {project['name']} - {platform.upper()} Build
+Generated by NativiWeb Studio
+
+Build ID: {build_id}
+Project: {project['name']}
+Platform: {platform}
+Status: {build.get('status', 'unknown')}
+
+## ⚠️ IMPORTANT : Ce fichier est un PROJET SOURCE
+
+Ce ZIP contient le **code source** du projet natif {platform.upper()}, **pas un APK/IPA compilé**.
+
+Pour obtenir une application installable, vous devez **compiler** le projet :
+- **Android** : Utilisez le script `build.sh` (Linux/Mac) ou `build.bat` (Windows), ou ouvrez le projet dans Android Studio
+- **iOS** : Ouvrez le projet dans Xcode sur macOS
+
+## 🚀 Compilation Rapide
+
+### Android
+```bash
+# Décompresser, puis :
+chmod +x build.sh && ./build.sh
+# OU sur Windows: build.bat
+```
+
+L'APK sera généré dans : `app/build/outputs/apk/debug/app-debug.apk`
+
+### iOS
+Ouvrez le projet `.xcodeproj` dans Xcode sur macOS, puis compilez.
+
+## 📖 Instructions Complètes
+
+Consultez le **README.md** dans le dossier du projet pour les instructions détaillées de compilation et d'installation.
+"""
                     zip_file.writestr('BUILD_INFO.md', readme)
                     zip_file.writestr('build-config.json', json.dumps({
                         "project": project['name'],
@@ -1086,11 +1817,19 @@ async def create_api_key(key_data: APIKeyCreate, user_id: str = Depends(get_curr
 
 @api_router.get("/api-keys")
 async def get_api_keys(user_id: str = Depends(get_current_user)):
+    # Mode dev : retourner une liste vide
+    if DEV_MODE:
+        return []
+    
     response = supabase.table("api_keys").select("*").eq("user_id", user_id).execute()
     return response.data or []
 
 @api_router.delete("/api-keys/{key_id}")
 async def delete_api_key(key_id: str, user_id: str = Depends(get_current_user)):
+    # Mode dev : retourner succès
+    if DEV_MODE:
+        return {"message": "API key deleted"}
+    
     supabase.table("api_keys").delete().eq("id", key_id).eq("user_id", user_id).execute()
     return {"message": "API key deleted"}
 
@@ -1102,6 +1841,15 @@ async def get_available_features():
 
 @api_router.get("/stats")
 async def get_user_stats(user_id: str = Depends(get_current_user)):
+    # Mode dev : retourner des stats factices
+    if DEV_MODE:
+        return {
+            "projects": 1,
+            "total_builds": 1,
+            "successful_builds": 1,
+            "api_keys": 0
+        }
+    
     projects = supabase.table("projects").select("id", count="exact").eq("user_id", user_id).execute()
     builds = supabase.table("builds").select("id", count="exact").eq("user_id", user_id).execute()
     successful = supabase.table("builds").select("id", count="exact").eq("user_id", user_id).eq("status", "completed").execute()
@@ -1799,10 +2547,29 @@ try:
     from generator import NativeTemplateGenerator
     generator = NativeTemplateGenerator()
     GENERATOR_AVAILABLE = True
+    logging.info("✅ Générateur de projets natifs disponible")
 except ImportError as e:
-    logging.warning(f"Generator not available: {e}")
+    logging.warning(f"⚠️ Generator not available: {e}")
     GENERATOR_AVAILABLE = False
     generator = None
+
+# Vérifier si AndroidBuilder est disponible au démarrage
+try:
+    from android_builder import AndroidBuilder
+    builder_test = AndroidBuilder()
+    deps_ok, deps_error = builder_test.check_dependencies()
+    if deps_ok:
+        logging.info("✅ AndroidBuilder disponible - Compilation d'APK activée")
+    else:
+        logging.warning(f"⚠️ AndroidBuilder disponible mais dépendances manquantes: {deps_error}")
+        logging.warning("⚠️ Les APKs ne seront pas compilés automatiquement. Les projets source seront fournis.")
+    ANDROID_BUILDER_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"⚠️ AndroidBuilder not available: {e} - Compilation d'APK désactivée")
+    ANDROID_BUILDER_AVAILABLE = False
+except Exception as e:
+    logging.error(f"❌ Erreur lors de l'initialisation d'AndroidBuilder: {e}")
+    ANDROID_BUILDER_AVAILABLE = False
 
 @api_router.get("/generator/download/{project_id}/{platform}")
 async def download_generated_project(
@@ -1898,23 +2665,22 @@ async def root():
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
 
-# Add compression middleware
-app.add_middleware(GZipMiddleware, minimum_size=1000)
-
-# Include the router
 # CORS - Must be added before including routers
 # Configure CORS based on environment
-cors_origins = ALLOWED_ORIGINS if ENVIRONMENT == "production" else ["http://localhost:3000", "http://localhost:3001"]
+cors_origins = ALLOWED_ORIGINS if ENVIRONMENT == "production" else ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001"]
 
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
     allow_origins=cors_origins,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
     max_age=3600,
 )
+
+# Add compression middleware (after CORS)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Trusted host middleware (production only)
 if ENVIRONMENT == "production":

@@ -10,9 +10,10 @@ interface DashboardLayoutProps {
   children: ReactNode
   title?: string
   subtitle?: string
+  actions?: ReactNode
 }
 
-export function DashboardLayout({ children, title, subtitle }: DashboardLayoutProps) {
+export function DashboardLayout({ children, title, subtitle, actions }: DashboardLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
   return (
@@ -48,17 +49,24 @@ export function DashboardLayout({ children, title, subtitle }: DashboardLayoutPr
 
       {/* Main content */}
       <main className="md:ml-64 p-4 md:p-8 pt-16 md:pt-8">
-        {(title || subtitle) && (
-          <div className="mb-6 md:mb-8">
-            {title && (
-              <h1 className="text-2xl md:text-3xl font-heading font-bold text-foreground" data-testid="page-title">
-                {title}
-              </h1>
-            )}
-            {subtitle && (
-              <p className="mt-2 text-sm md:text-base text-muted-foreground" data-testid="page-subtitle">
-                {subtitle}
-              </p>
+        {(title || subtitle || actions) && (
+          <div className="mb-6 md:mb-8 flex items-start justify-between gap-4">
+            <div className="flex-1">
+              {title && (
+                <h1 className="text-2xl md:text-3xl font-heading font-bold text-foreground" data-testid="page-title">
+                  {title}
+                </h1>
+              )}
+              {subtitle && (
+                <p className="mt-2 text-sm md:text-base text-muted-foreground" data-testid="page-subtitle">
+                  {subtitle}
+                </p>
+              )}
+            </div>
+            {actions && (
+              <div className="flex items-center gap-2">
+                {actions}
+              </div>
             )}
           </div>
         )}

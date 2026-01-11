@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { projectsApi } from '@/lib/api'
 import { toast } from 'sonner'
+import { logger } from '@/lib/logger'
 import { 
   Plus, 
   Globe, 
@@ -18,6 +19,14 @@ import {
   Trash2,
   Loader2
 } from 'lucide-react'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
 interface Project {
   id: string
@@ -34,6 +43,9 @@ export default function ProjectsPage() {
   const router = useRouter()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [projectToDelete, setProjectToDelete] = useState<Project | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -45,11 +57,17 @@ export default function ProjectsPage() {
     const fetchProjects = async () => {
       if (!user?.id) return
       try {
-        const data = await projectsApi.getAll()
+        // Utiliser le cache pour un chargement plus rapide
+        const data = await projectsApi.getAll(true)
         setProjects(data)
-      } catch (error) {
-        console.error('Failed to fetch projects:', error)
-        toast.error('Failed to load projects')
+      } catch (error: any) {
+        logger.error('Failed to fetch projects', error, { userId: user?.id })
+        // Gestion d'erreur plus robuste
+        if (error.isConnectionError) {
+          toast.error('Impossible de se connecter au serveur. Vérifiez que le backend est démarré.')
+        } else {
+          toast.error(error.response?.data?.detail || 'Échec du chargement des projets')
+        }
       } finally {
         setLoading(false)
       }
@@ -57,19 +75,28 @@ export default function ProjectsPage() {
     fetchProjects()
   }, [user])
 
-  const handleDelete = async (projectId: string, e: React.MouseEvent) => {
+  const handleDeleteClick = (project: Project, e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    if (!user?.id) return
+    setProjectToDelete(project)
+    setDeleteDialogOpen(true)
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!projectToDelete || !user?.id) return
     
-    if (!confirm('Are you sure you want to delete this project?')) return
-    
+    setDeleting(true)
     try {
-      await projectsApi.delete(projectId)
-      setProjects(projects.filter(p => p.id !== projectId))
-      toast.success('Project deleted')
-    } catch (error) {
-      toast.error('Failed to delete project')
+      await projectsApi.delete(projectToDelete.id)
+      setProjects(projects.filter(p => p.id !== projectToDelete.id))
+      toast.success('Projet supprimé avec succès')
+      setDeleteDialogOpen(false)
+      setProjectToDelete(null)
+    } catch (error: any) {
+      logger.error('Erreur lors de la suppression', error, { projectId: projectToDelete.id })
+      toast.error(error.response?.data?.detail || 'Échec de la suppression du projet')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -83,6 +110,49 @@ export default function ProjectsPage() {
 
   return (
     <DashboardLayout title="Projects" subtitle="Manage your NativiWeb projects">
+      {/* Dialog de confirmation de suppression */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent className="bg-background-paper border-white/10">
+          <DialogHeader>
+            <DialogTitle className="text-destructive">Supprimer le projet</DialogTitle>
+            <DialogDescription>
+              Êtes-vous sûr de vouloir supprimer le projet <strong>"{projectToDelete?.name}"</strong> ? 
+              <br />
+              Cette action est <strong>irréversible</strong> et supprimera également tous les builds associés.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDeleteDialogOpen(false)
+                setProjectToDelete(null)
+              }}
+              disabled={deleting}
+            >
+              Annuler
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteConfirm}
+              disabled={deleting}
+            >
+              {deleting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Suppression...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Supprimer définitivement
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div className="flex justify-end mb-6">
         <Link href="/projects/new">
           <Button className="bg-primary text-black font-bold hover:bg-primary-hover" data-testid="create-project-btn">
@@ -126,7 +196,7 @@ export default function ProjectsPage() {
                       variant="ghost"
                       size="icon"
                       className="text-muted-foreground hover:text-destructive"
-                      onClick={(e) => handleDelete(project.id, e)}
+                      onClick={(e) => handleDeleteClick(project, e)}
                       data-testid={`delete-project-${project.id}`}
                     >
                       <Trash2 className="w-4 h-4" />

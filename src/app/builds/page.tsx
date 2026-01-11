@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { buildsApi, projectsApi } from '@/lib/api'
 import { toast } from 'sonner'
+import { logger } from '@/lib/logger'
 import { 
   Smartphone, 
   Apple, 
@@ -20,8 +21,18 @@ import {
   AlertCircle,
   Loader2,
   Rocket,
-  Info
+  Info,
+  Trash2,
+  Trash
 } from 'lucide-react'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 // Modals conservés pour référence future si nécessaire
 // import { PlayStoreModal } from '@/components/publication/PlayStoreModal'
 // import { AppStoreModal } from '@/components/publication/AppStoreModal'
@@ -55,6 +66,10 @@ export default function BuildsPage() {
   const [builds, setBuilds] = useState<Build[]>([])
   const [projects, setProjects] = useState<Record<string, Project>>({})
   const [loading, setLoading] = useState(true)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false)
+  const [buildToDelete, setBuildToDelete] = useState<Build | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -62,30 +77,81 @@ export default function BuildsPage() {
     }
   }, [user, authLoading, router])
 
-  useEffect(() => {
-    const fetchData = async () => {
-      if (!user?.id) return
-      try {
-        const [buildsData, projectsData] = await Promise.all([
-          buildsApi.getAll(),
-          projectsApi.getAll()
-        ])
-        setBuilds(buildsData)
-        
-        // Create a map of projects
-        const projectsMap: Record<string, Project> = {}
-        projectsData.forEach((p: Project) => {
-          projectsMap[p.id] = p
-        })
-        setProjects(projectsMap)
-      } catch (error) {
-        console.error('Failed to fetch builds:', error)
-      } finally {
-        setLoading(false)
+  const fetchData = async () => {
+    if (!user?.id) return
+    try {
+      const [buildsData, projectsData] = await Promise.all([
+        buildsApi.getAll(),
+        projectsApi.getAll(true) // Utiliser le cache pour les projets
+      ])
+      setBuilds(buildsData)
+      
+      // Create a map of projects
+      const projectsMap: Record<string, Project> = {}
+      projectsData.forEach((p: Project) => {
+        projectsMap[p.id] = p
+      })
+      setProjects(projectsMap)
+    } catch (error: any) {
+      logger.error('Failed to fetch builds', error, { userId: user?.id })
+      if (error.isConnectionError) {
+        toast.error('Impossible de se connecter au serveur. Vérifiez que le backend est démarré.')
+      } else {
+        toast.error(error.response?.data?.detail || 'Échec du chargement des builds')
       }
+    } finally {
+      setLoading(false)
     }
+  }
+
+  useEffect(() => {
     fetchData()
   }, [user])
+
+  const handleDeleteClick = (build: Build) => {
+    setBuildToDelete(build)
+    setDeleteDialogOpen(true)
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!buildToDelete || !user?.id) return
+    
+    setDeleting(true)
+    try {
+      await buildsApi.delete(buildToDelete.id)
+      setBuilds(builds.filter(b => b.id !== buildToDelete.id))
+      toast.success('Build supprimé avec succès')
+      setDeleteDialogOpen(false)
+      setBuildToDelete(null)
+    } catch (error: any) {
+      logger.error('Erreur lors de la suppression du build', error, { buildId: buildToDelete.id })
+      toast.error(error.response?.data?.detail || 'Échec de la suppression du build')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const handleDeleteAllClick = () => {
+    if (builds.length === 0) return
+    setDeleteAllDialogOpen(true)
+  }
+
+  const handleDeleteAllConfirm = async () => {
+    if (!user?.id || builds.length === 0) return
+    
+    setDeleting(true)
+    try {
+      await buildsApi.deleteAll()
+      setBuilds([])
+      toast.success(`Tous les builds ont été supprimés (${builds.length} builds)`)
+      setDeleteAllDialogOpen(false)
+    } catch (error: any) {
+      logger.error('Erreur lors de la suppression de tous les builds', error, { count: builds.length, userId: user?.id })
+      toast.error(error.response?.data?.detail || 'Échec de la suppression des builds')
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   if (authLoading || !user) {
     return (
@@ -110,10 +176,113 @@ export default function BuildsPage() {
 
   return (
     <DashboardLayout title="Builds" subtitle="View all your build history">
+      {/* Dialog de confirmation de suppression d'un build */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent className="bg-background-paper border-white/10">
+          <DialogHeader>
+            <DialogTitle className="text-destructive">Supprimer le build</DialogTitle>
+            <DialogDescription>
+              Êtes-vous sûr de vouloir supprimer ce build pour <strong>"{buildToDelete ? projects[buildToDelete.project_id]?.name || 'Unknown Project' : ''}"</strong> ? 
+              <br />
+              Cette action est <strong>irréversible</strong>.
+              {buildToDelete?.status === 'completed' && (
+                <span className="block mt-2 text-warning">
+                  ⚠️ Le fichier téléchargeable sera également supprimé.
+                </span>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDeleteDialogOpen(false)
+                setBuildToDelete(null)
+              }}
+              disabled={deleting}
+            >
+              Annuler
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteConfirm}
+              disabled={deleting}
+            >
+              {deleting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Suppression...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Supprimer
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog de confirmation de suppression de tout l'historique */}
+      <Dialog open={deleteAllDialogOpen} onOpenChange={setDeleteAllDialogOpen}>
+        <DialogContent className="bg-background-paper border-white/10">
+          <DialogHeader>
+            <DialogTitle className="text-destructive">Supprimer tout l'historique</DialogTitle>
+            <DialogDescription>
+              Êtes-vous sûr de vouloir supprimer <strong>tous les builds</strong> ({builds.length} build{builds.length > 1 ? 's' : ''}) ?
+              <br />
+              Cette action est <strong>irréversible</strong> et supprimera tous les fichiers téléchargeables.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteAllDialogOpen(false)}
+              disabled={deleting}
+            >
+              Annuler
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteAllConfirm}
+              disabled={deleting}
+            >
+              {deleting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Suppression...
+                </>
+              ) : (
+                <>
+                  <Trash className="w-4 h-4 mr-2" />
+                  Supprimer tout ({builds.length})
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Card className="bg-background-paper border-white/10">
         <CardHeader>
-          <CardTitle>Build History</CardTitle>
-          <CardDescription>All builds across your projects</CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>Build History</CardTitle>
+              <CardDescription>All builds across your projects</CardDescription>
+            </div>
+            {builds.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:border-destructive/50"
+                onClick={handleDeleteAllClick}
+              >
+                <Trash className="w-4 h-4 mr-2" />
+                Supprimer tout
+              </Button>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -167,6 +336,18 @@ export default function BuildsPage() {
                     
                     {getStatusBadge(build.status)}
                     
+                    {/* Bouton de suppression pour chaque build */}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="text-muted-foreground hover:text-destructive"
+                      onClick={() => handleDeleteClick(build)}
+                      disabled={build.status === 'processing'}
+                      data-testid={`delete-build-${build.id}`}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                    
                     {build.status === 'completed' && (
                       <div className="flex items-center gap-2">
                         {/* Badge Prêt à publier */}
@@ -200,7 +381,7 @@ export default function BuildsPage() {
                                     document.body.removeChild(a)
                                     toast.success('Téléchargement démarré !')
                                   } catch (error: any) {
-                                    console.error('Erreur de téléchargement:', error)
+                                    logger.error('Erreur de téléchargement', error, { buildId: build.id, platform: build.platform })
                                     toast.error(error.response?.data?.detail || 'Erreur lors du téléchargement')
                                   }
                                 }}

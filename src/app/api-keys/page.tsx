@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { apiKeysApi } from '@/lib/api'
 import { toast } from 'sonner'
+import { logger } from '@/lib/logger'
 import { 
   Key, 
   Plus, 
@@ -54,7 +55,7 @@ export default function ApiKeysPage() {
         const data = await apiKeysApi.getAll()
         setApiKeys(data)
       } catch (error) {
-        console.error('Failed to fetch API keys:', error)
+        logger.error('Failed to fetch API keys', error, { userId: user?.id })
       } finally {
         setLoading(false)
       }

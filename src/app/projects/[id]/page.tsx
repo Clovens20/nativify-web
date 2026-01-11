@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { projectsApi, buildsApi, featuresApi } from '@/lib/api'
 import { toast } from 'sonner'
+import { logger } from '@/lib/logger'
 import { 
   Globe, 
   Smartphone, 
@@ -25,8 +26,17 @@ import {
   CheckCircle2,
   Rocket,
   XCircle,
-  AlertCircle
+  AlertCircle,
+  Trash2
 } from 'lucide-react'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
 interface Feature {
   id: string
@@ -71,6 +81,10 @@ export default function ProjectDetailPage() {
   const [loading, setLoading] = useState(true)
   const [buildingPlatform, setBuildingPlatform] = useState<string | null>(null)
   const [activeBuild, setActiveBuild] = useState<Build | null>(null)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleteBuildDialogOpen, setDeleteBuildDialogOpen] = useState(false)
+  const [buildToDelete, setBuildToDelete] = useState<Build | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     const fetchData = async () => {
@@ -82,42 +96,69 @@ export default function ProjectDetailPage() {
       
       while (retries > 0) {
         try {
-          const [projectData, buildsData, featuresData] = await Promise.all([
+          // Utiliser Promise.allSettled pour ne pas bloquer sur les erreurs
+          const [projectResult, buildsResult, featuresResult] = await Promise.allSettled([
             projectsApi.getOne(projectId),
             buildsApi.getAll(projectId).catch(() => []), // Ne pas bloquer si les builds échouent
             featuresApi.getAll().catch(() => []) // Ne pas bloquer si les features échouent
           ])
           
-          setProject(projectData)
-          setBuilds(buildsData || [])
-          setAvailableFeatures(featuresData || [])
+          // Traiter les résultats
+          if (projectResult.status === 'fulfilled') {
+            setProject(projectResult.value)
+          } else {
+            throw projectResult.reason
+          }
+          
+          if (buildsResult.status === 'fulfilled') {
+            setBuilds(buildsResult.value || [])
+          }
+          
+          if (featuresResult.status === 'fulfilled') {
+            setAvailableFeatures(featuresResult.value || [])
+          }
+          
           setLoading(false)
           return // Succès, sortir de la boucle
         } catch (error: any) {
           retries--
           const isNotFound = error.response?.status === 404
-          const isConnectionError = error.isConnectionError || error.code === 'ECONNREFUSED'
+          const isConnectionError = error.isConnectionError || error.code === 'ECONNREFUSED' || error.message?.includes('Network Error')
+          const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout')
           
           if (isConnectionError) {
-            // Erreur de connexion, ne pas réessayer
-            console.error('Backend connection error:', error)
-            toast.error('Impossible de se connecter au serveur. Vérifiez que le backend est démarré.')
-            setLoading(false)
-            router.push('/projects')
+            // Erreur de connexion, ne pas réessayer indéfiniment
+            logger.error('Backend connection error', error, { projectId, retries })
+            if (retries === 0) {
+              toast.error('Impossible de se connecter au serveur. Vérifiez que le backend est démarré.')
+              setLoading(false)
+              router.push('/projects')
+            }
             return
+          }
+          
+          if (isTimeout && retries > 0) {
+            // Timeout, réessayer avec backoff exponentiel
+            logger.warn('Request timeout - retrying', { retries, delay, projectId })
+            await new Promise(resolve => setTimeout(resolve, delay))
+            delay *= 2 // Backoff exponentiel
+            continue
           }
           
           if (isNotFound && retries > 0) {
             // Projet pas encore disponible, réessayer après un délai
-            console.warn(`Project not found (retries left: ${retries}), retrying in ${delay}ms...`)
+            logger.warn('Project not found - retrying', { retries, delay, projectId })
             await new Promise(resolve => setTimeout(resolve, delay))
             delay *= 2 // Backoff exponentiel
           } else {
             // Autre erreur ou plus de tentatives
-            console.error('Failed to fetch project:', error)
-            toast.error(error.response?.data?.detail || 'Impossible de charger le projet')
+            logger.error('Failed to fetch project', error, { projectId, retries })
+            toast.error(error.response?.data?.detail || error.message || 'Impossible de charger le projet')
             setLoading(false)
-            router.push('/projects')
+            if (!isNotFound) {
+              // Ne rediriger que si ce n'est pas une erreur 404 (projet pourrait exister)
+              router.push('/projects')
+            }
             return
           }
         }
@@ -153,7 +194,7 @@ export default function ProjectDetailPage() {
           setBuildingPlatform(null)
         }
       } catch (error) {
-        console.error('Failed to fetch build status:', error)
+        logger.error('Failed to fetch build status', error, { buildId: activeBuild.id, projectId })
       }
     }, 2000)
 
@@ -196,6 +237,44 @@ export default function ProjectDetailPage() {
     }
   }
 
+  const handleDeleteProject = async () => {
+    if (!project || !user?.id) return
+    
+    setDeleting(true)
+    try {
+      await projectsApi.delete(projectId)
+      toast.success('Projet supprimé avec succès')
+      router.push('/projects')
+    } catch (error: any) {
+      logger.error('Erreur lors de la suppression du projet', error, { projectId })
+      toast.error(error.response?.data?.detail || 'Échec de la suppression du projet')
+      setDeleting(false)
+    }
+  }
+
+  const handleDeleteBuildClick = (build: Build) => {
+    setBuildToDelete(build)
+    setDeleteBuildDialogOpen(true)
+  }
+
+  const handleDeleteBuildConfirm = async () => {
+    if (!buildToDelete || !user?.id) return
+    
+    setDeleting(true)
+    try {
+      await buildsApi.delete(buildToDelete.id)
+      setBuilds(builds.filter(b => b.id !== buildToDelete.id))
+      toast.success('Build supprimé avec succès')
+      setDeleteBuildDialogOpen(false)
+      setBuildToDelete(null)
+    } catch (error: any) {
+      logger.error('Erreur lors de la suppression du build', error, { buildId: buildToDelete.id, projectId })
+      toast.error(error.response?.data?.detail || 'Échec de la suppression du build')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   if (loading || !project) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -205,7 +284,109 @@ export default function ProjectDetailPage() {
   }
 
   return (
-    <DashboardLayout title={project.name} subtitle={project.web_url}>
+    <DashboardLayout 
+      title={project.name} 
+      subtitle={project.web_url}
+      actions={
+        <Button
+          variant="outline"
+          size="sm"
+          className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:border-destructive/50"
+          onClick={() => setDeleteDialogOpen(true)}
+        >
+          <Trash2 className="w-4 h-4 mr-2" />
+          Supprimer
+        </Button>
+      }
+    >
+      {/* Dialog de confirmation de suppression du projet */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent className="bg-background-paper border-white/10">
+          <DialogHeader>
+            <DialogTitle className="text-destructive">Supprimer le projet</DialogTitle>
+            <DialogDescription>
+              Êtes-vous sûr de vouloir supprimer le projet <strong>"{project.name}"</strong> ? 
+              <br />
+              Cette action est <strong>irréversible</strong> et supprimera également tous les builds associés.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteDialogOpen(false)}
+              disabled={deleting}
+            >
+              Annuler
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteProject}
+              disabled={deleting}
+            >
+              {deleting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Suppression...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Supprimer définitivement
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog de confirmation de suppression d'un build */}
+      <Dialog open={deleteBuildDialogOpen} onOpenChange={setDeleteBuildDialogOpen}>
+        <DialogContent className="bg-background-paper border-white/10">
+          <DialogHeader>
+            <DialogTitle className="text-destructive">Supprimer le build</DialogTitle>
+            <DialogDescription>
+              Êtes-vous sûr de vouloir supprimer ce build {buildToDelete ? `(${buildToDelete.platform.toUpperCase()})` : ''} ? 
+              <br />
+              Cette action est <strong>irréversible</strong>.
+              {buildToDelete?.status === 'completed' && (
+                <span className="block mt-2 text-warning">
+                  ⚠️ Le fichier téléchargeable sera également supprimé.
+                </span>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDeleteBuildDialogOpen(false)
+                setBuildToDelete(null)
+              }}
+              disabled={deleting}
+            >
+              Annuler
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteBuildConfirm}
+              disabled={deleting}
+            >
+              {deleting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Suppression...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Supprimer
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Tabs defaultValue="overview" className="space-y-6">
         <TabsList className="bg-background-subtle">
           <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -447,7 +628,7 @@ export default function ProjectDetailPage() {
                                     document.body.removeChild(a)
                                     toast.success('Téléchargement démarré !')
                                   } catch (error: any) {
-                                    console.error('Erreur de téléchargement:', error)
+                                    logger.error('Erreur de téléchargement', error, { buildId: build.id, platform: build.platform })
                                     toast.error(error.response?.data?.detail || 'Erreur lors du téléchargement')
                                   }
                                 }}
@@ -482,6 +663,17 @@ export default function ProjectDetailPage() {
                               )}
                             </div>
                           )}
+                          {/* Bouton de suppression */}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="text-muted-foreground hover:text-destructive"
+                            onClick={() => handleDeleteBuildClick(build)}
+                            disabled={build.status === 'processing'}
+                            data-testid={`delete-build-${build.id}`}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
                         </div>
                       </div>
                     ))}

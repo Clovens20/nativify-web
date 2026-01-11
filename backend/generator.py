@@ -1,6 +1,7 @@
 """
 Générateur de templates natifs Android et iOS pour NativiWeb Studio
 Génère des projets complets et fonctionnels prêts à être compilés
+VERSION CORRIGÉE
 """
 import os
 import json
@@ -59,19 +60,38 @@ class NativeTemplateGenerator:
             app_build_gradle = self._generate_app_build_gradle(package_name, features)
             zip_file.writestr(f"{base_dir}/app/build.gradle", app_build_gradle)
             
-            # 4. activity_main.xml (Layout)
+            # 4. activity_main.xml (Layout) - VERSION AMÉLIORÉE
             activity_main = """<?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.swiperefreshlayout.widget.SwipeRefreshLayout 
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/swipeRefresh"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical">
+    android:layout_height="match_parent">
 
-    <WebView
-        android:id="@+id/webView"
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent">
 
-</LinearLayout>
+        <WebView
+            android:id="@+id/webView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <ProgressBar
+            android:id="@+id/progressBar"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="4dp"
+            android:layout_gravity="top"
+            android:max="100"
+            android:progress="0"
+            android:progressTint="@android:color/holo_blue_bright"
+            android:visibility="gone" />
+
+    </FrameLayout>
+
+</androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 """
             zip_file.writestr(f"{base_dir}/app/src/main/res/layout/activity_main.xml", activity_main)
             
@@ -105,6 +125,97 @@ zipStoreBase=GRADLE_USER_HOME
 zipStorePath=wrapper/dists
 """
             zip_file.writestr(f"{base_dir}/gradle/wrapper/gradle-wrapper.properties", gradle_wrapper_props)
+            
+            # 9.0. gradle/wrapper/gradle-wrapper.jar - Placeholder (sera téléchargé par android_builder.py)
+            gradle_wrapper_info = """# Gradle Wrapper JAR
+# Ce fichier sera téléchargé automatiquement par le système de build lors de la compilation.
+# Le JAR sera téléchargé depuis: https://raw.githubusercontent.com/gradle/gradle/v8.2.0/gradle/wrapper/gradle-wrapper.jar
+"""
+            zip_file.writestr(f"{base_dir}/gradle/wrapper/gradle-wrapper.jar.info", gradle_wrapper_info)
+            
+            # 9.1. gradlew (Linux/Mac script)
+            gradlew_script = """#!/bin/sh
+# Gradle wrapper script (version simplifiée)
+APP_HOME=$( cd "${APP_HOME:-./}" && pwd -P ) || exit
+CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
+
+if [ -n "$JAVA_HOME" ] ; then
+    if [ -x "$JAVA_HOME/jre/sh/java" ] ; then
+        JAVACMD=$JAVA_HOME/jre/sh/java
+    else
+        JAVACMD=$JAVA_HOME/bin/java
+    fi
+else
+    JAVACMD=java
+fi
+
+DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
+
+exec "$JAVACMD" $DEFAULT_JVM_OPTS -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"
+"""
+            zip_file.writestr(f"{base_dir}/gradlew", gradlew_script)
+            
+            # 9.2. gradlew.bat (Windows script)
+            gradlew_bat = """@echo off
+@rem Gradle startup script for Windows
+set DIRNAME=%~dp0
+set APP_HOME=%DIRNAME%
+set CLASSPATH=%APP_HOME%\\gradle\\wrapper\\gradle-wrapper.jar
+set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
+
+if defined JAVA_HOME goto findJavaFromJavaHome
+set JAVA_EXE=java.exe
+goto execute
+
+:findJavaFromJavaHome
+set JAVA_EXE=%JAVA_HOME%/bin/java.exe
+
+:execute
+"%JAVA_EXE%" %DEFAULT_JVM_OPTS% -classpath "%CLASSPATH%" org.gradle.wrapper.GradleWrapperMain %*
+"""
+            zip_file.writestr(f"{base_dir}/gradlew.bat", gradlew_bat)
+            
+            # 9.3. Script de build automatique (build.sh)
+            build_sh = f"""#!/bin/bash
+# Script de build automatique pour {project_name}
+set -e
+echo "🚀 Compilation de {project_name}..."
+if ! command -v java &> /dev/null; then
+    echo "❌ Java non installé. Téléchargez: https://adoptium.net/"
+    exit 1
+fi
+echo "✓ Java: $(java -version 2>&1 | head -n 1)"
+chmod +x ./gradlew
+echo "📦 Compilation APK Debug..."
+./gradlew assembleDebug
+if [ $? -eq 0 ]; then
+    echo "✅ APK généré: app/build/outputs/apk/debug/app-debug.apk"
+else
+    echo "❌ Erreur de compilation"
+    exit 1
+fi
+"""
+            zip_file.writestr(f"{base_dir}/build.sh", build_sh)
+            
+            # 9.4. Script de build automatique Windows (build.bat)
+            build_bat = f"""@echo off
+echo 🚀 Compilation de {project_name}...
+java -version >nul 2>&1
+if %ERRORLEVEL% neq 0 (
+    echo ❌ Java non installé
+    exit /b 1
+)
+echo ✓ Java détecté
+echo 📦 Compilation APK Debug...
+call gradlew.bat assembleDebug
+if %ERRORLEVEL% equ 0 (
+    echo ✅ APK généré: app\\build\\outputs\\apk\\debug\\app-debug.apk
+) else (
+    echo ❌ Erreur de compilation
+    exit /b 1
+)
+"""
+            zip_file.writestr(f"{base_dir}/build.bat", build_bat)
             
             # 10. app/src/main/res/values/strings.xml
             strings_xml = f"""<?xml version="1.0" encoding="utf-8"?>
@@ -144,85 +255,18 @@ zipStorePath=wrapper/dists
             gitignore = """*.iml
 .gradle
 /local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
+/.idea/
 .DS_Store
 /build
 /captures
 .externalNativeBuild
 .cxx
-local.properties
 """
             zip_file.writestr(f"{base_dir}/.gitignore", gitignore)
             
         zip_buffer.seek(0)
         return zip_buffer.read()
-    
-    def generate_ios_project(
-        self,
-        project_name: str,
-        bundle_identifier: str,
-        web_url: str,
-        features: List[Dict[str, Any]],
-        app_icon_url: Optional[str] = None
-    ) -> bytes:
-        """
-        Génère un projet iOS complet et fonctionnel
-        
-        Args:
-            project_name: Nom de l'application
-            bundle_identifier: Bundle ID (ex: com.example.app)
-            web_url: URL de l'application web
-            features: Liste des fonctionnalités activées
-            app_icon_url: URL de l'icône de l'application
-            
-        Returns:
-            Bytes du fichier ZIP contenant le projet iOS complet
-        """
-        zip_buffer = io.BytesIO()
-        
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            base_dir = f"{project_name.replace(' ', '')}-iOS"
-            
-            # 1. ContentView.swift - Vue principale avec WebView
-            content_view = self._generate_content_view(bundle_identifier, web_url, features)
-            zip_file.writestr(f"{base_dir}/{project_name.replace(' ', '')}/ContentView.swift", content_view)
-            
-            # 2. App.swift - Point d'entrée de l'application
-            app_swift = self._generate_app_swift(project_name)
-            zip_file.writestr(f"{base_dir}/{project_name.replace(' ', '')}/App.swift", app_swift)
-            
-            # 3. NativiWebBridge.swift - Bridge pour communiquer avec le WebView
-            # Note: layout.swift est intégré dans ContentView
-            bridge_swift = self._generate_ios_bridge(bundle_identifier, features)
-            zip_file.writestr(f"{base_dir}/{project_name.replace(' ', '')}/NativiWebBridge.swift", bridge_swift)
-            
-            # 4. Info.plist
-            info_plist = self._generate_info_plist(bundle_identifier, project_name, features)
-            zip_file.writestr(f"{base_dir}/{project_name.replace(' ', '')}/Info.plist", info_plist)
-            
-            # 5. project.pbxproj - Fichier de projet Xcode
-            project_file = self._generate_xcode_project(project_name, bundle_identifier)
-            zip_file.writestr(f"{base_dir}/{project_name.replace(' ', '')}.xcodeproj/project.pbxproj", project_file)
-            
-            # 6. SDK JavaScript personnalisé
-            sdk_js = self._generate_javascript_sdk(web_url, features, "ios")
-            zip_file.writestr(f"{base_dir}/{project_name.replace(' ', '')}/Assets/nativiweb-sdk.js", sdk_js)
-            
-            # 7. README.md
-            readme = self._generate_ios_readme(project_name, bundle_identifier, web_url)
-            zip_file.writestr(f"{base_dir}/README.md", readme)
-            
-            # 8. Podfile pour CocoaPods (si nécessaire)
-            podfile = self._generate_podfile(project_name)
-            zip_file.writestr(f"{base_dir}/Podfile", podfile)
-            
-        zip_buffer.seek(0)
-        return zip_buffer.read()
+# CONTINUATION DE LA CLASSE NativeTemplateGenerator
     
     def _generate_android_manifest(self, package_name: str, app_name: str, features: List[Dict[str, Any]]) -> str:
         """Génère AndroidManifest.xml avec permissions selon les fonctionnalités"""
@@ -275,7 +319,7 @@ local.properties
 """
     
     def _generate_project_build_gradle(self) -> str:
-        """Génère build.gradle au niveau projet"""
+        """Génère build.gradle au niveau projet - VERSION CORRIGÉE"""
         return """// Top-level build file
 buildscript {
     ext.kotlin_version = '1.9.20'
@@ -284,7 +328,7 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.1.2'
+        classpath 'com.android.tools.build:gradle:8.2.0'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
     }
 }
@@ -302,7 +346,7 @@ task clean(type: Delete) {
 """
     
     def _generate_app_build_gradle(self, package_name: str, features: List[Dict[str, Any]]) -> str:
-        """Génère build.gradle au niveau app"""
+        """Génère build.gradle au niveau app - VERSION CORRIGÉE"""
         return f"""plugins {{
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
@@ -314,10 +358,12 @@ android {{
 
     defaultConfig {{
         applicationId "{package_name}"
-        minSdk 23
+        minSdk 24
         targetSdk 34
         versionCode 1
         versionName "1.0.0"
+        
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }}
 
     buildTypes {{
@@ -325,80 +371,165 @@ android {{
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }}
+        debug {{
+            minifyEnabled false
+            debuggable true
+        }}
     }}
 
     compileOptions {{
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }}
 
     kotlinOptions {{
-        jvmTarget = '1.8'
+        jvmTarget = '17'
+    }}
+    
+    buildFeatures {{
+        viewBinding true
     }}
 }}
 
 dependencies {{
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'com.google.android.material:material:1.10.0'
-    implementation 'androidx.webkit:webkit:1.8.0'
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'androidx.webkit:webkit:1.9.0'
+    implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
+    
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
 }}
 """
     
     def _generate_main_activity(self, package_name: str, web_url: str, features: List[Dict[str, Any]]) -> str:
-        """Génère MainActivity.kt avec WebView et bridge"""
+        """Génère MainActivity.kt avec WebView et bridge - VERSION CORRIGÉE"""
         enabled_features = [f.get("id") for f in features if f.get("enabled")]
-        features_json = json.dumps(enabled_features)
         
         return f"""package {package_name}
 
 import android.annotation.SuppressLint
 import android.os.Bundle
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import android.webkit.WebChromeClient
+import android.webkit.*
+import android.view.View
+import android.widget.ProgressBar
 import androidx.appcompat.app.AppCompatActivity
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 
 class MainActivity : AppCompatActivity() {{
     private lateinit var webView: WebView
     private lateinit var bridge: NativiWebBridge
+    private lateinit var progressBar: ProgressBar
+    private lateinit var swipeRefresh: SwipeRefreshLayout
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {{
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // Initialiser les vues
         webView = findViewById(R.id.webView)
+        progressBar = findViewById(R.id.progressBar)
+        swipeRefresh = findViewById(R.id.swipeRefresh)
         
-        // Configuration WebView
-        webView.settings.javaScriptEnabled = true
-        webView.settings.domStorageEnabled = true
-        webView.settings.databaseEnabled = true
-        webView.settings.setSupportZoom(true)
-        webView.settings.builtInZoomControls = false
-        webView.settings.displayZoomControls = false
-        webView.settings.useWideViewPort = true
-        webView.settings.loadWithOverviewMode = true
-        webView.settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-
+        // Configuration WebView complète
+        configureWebView()
+        
         // Bridge pour communication native <-> JavaScript
         bridge = NativiWebBridge(this, webView)
         webView.addJavascriptInterface(bridge, "NativiWebNative")
 
         // WebViewClient pour intercepter les chargements
         webView.webViewClient = object : WebViewClient() {{
+            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {{
+                super.onPageStarted(view, url, favicon)
+                progressBar.visibility = View.VISIBLE
+            }}
+            
             override fun onPageFinished(view: WebView?, url: String?) {{
                 super.onPageFinished(view, url)
+                progressBar.visibility = View.GONE
+                swipeRefresh.isRefreshing = false
+                
                 // Injecter le SDK JavaScript
-                val sdkScript = assets.open("nativiweb-sdk.js").bufferedReader().use {{ it.readText() }}
-                view?.evaluateJavascript(sdkScript, null)
+                try {{
+                    val sdkScript = assets.open("nativiweb-sdk.js").bufferedReader().use {{ it.readText() }}
+                    view?.evaluateJavascript(sdkScript, null)
+                }} catch (e: Exception) {{
+                    e.printStackTrace()
+                }}
+            }}
+            
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: WebResourceError?
+            ) {{
+                super.onReceivedError(view, request, error)
+                progressBar.visibility = View.GONE
+                swipeRefresh.isRefreshing = false
             }}
         }}
 
-        webView.webChromeClient = WebChromeClient()
+        webView.webChromeClient = object : WebChromeClient() {{
+            override fun onProgressChanged(view: WebView?, newProgress: Int) {{
+                super.onProgressChanged(view, newProgress)
+                progressBar.progress = newProgress
+            }}
+            
+            // Support pour les permissions (caméra, géolocalisation, etc.)
+            override fun onPermissionRequest(request: PermissionRequest?) {{
+                request?.grant(request.resources)
+            }}
+        }}
+        
+        // Configuration du pull-to-refresh
+        swipeRefresh.setOnRefreshListener {{
+            webView.reload()
+        }}
 
         // Charger l'URL web
         webView.loadUrl("{web_url}")
+    }}
+    
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun configureWebView() {{
+        with(webView.settings) {{
+            // JavaScript
+            javaScriptEnabled = true
+            javaScriptCanOpenWindowsAutomatically = true
+            
+            // Stockage
+            domStorageEnabled = true
+            databaseEnabled = true
+            
+            // Cache
+            cacheMode = WebSettings.LOAD_DEFAULT
+            
+            // Zoom
+            setSupportZoom(true)
+            builtInZoomControls = true
+            displayZoomControls = false
+            
+            // Viewport
+            useWideViewPort = true
+            loadWithOverviewMode = true
+            
+            // Media
+            mediaPlaybackRequiresUserGesture = false
+            
+            // Contenu mixte (HTTP/HTTPS)
+            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            
+            // User Agent
+            userAgentString = "${{userAgentString}} NativiWeb/1.0"
+        }}
+        
+        // Activer le débogage WebView
+        WebView.setWebContentsDebuggingEnabled(true)
     }}
 
     override fun onBackPressed() {{
@@ -408,29 +539,31 @@ class MainActivity : AppCompatActivity() {{
             super.onBackPressed()
         }}
     }}
+    
+    override fun onDestroy() {{
+        super.onDestroy()
+        webView.destroy()
+    }}
 }}
 """
     
     def _generate_native_bridge(self, package_name: str, features: List[Dict[str, Any]]) -> str:
-        """Génère NativiWebBridge.kt pour communication native"""
-        enabled_features = [f.get("id") for f in features if f.get("enabled")]
+        """Génère NativiWebBridge.kt pour communication native - VERSION CORRIGÉE"""
         
         return f"""package {package_name}
 
 import android.Manifest
 import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.pm.PackageManager
-import android.location.Location
-import android.location.LocationManager
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
-import android.app.Activity
 
 class NativiWebBridge(private val context: Context, private val webView: WebView) {{
     private val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
@@ -454,27 +587,245 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
             put("manufacturer", Build.MANUFACTURER)
             put("appVersion", "1.0.0")
             put("sdkVersion", "1.0.0")
+            put("isNative", true)
         }}
         return info.toString()
     }}
 
     @JavascriptInterface
     fun vibrate(duration: Int) {{
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {{
-            vibrator?.vibrate(VibrationEffect.createOneShot(duration.toLong(), VibrationEffect.DEFAULT_AMPLITUDE))
-        }} else {{
-            vibrator?.vibrate(duration.toLong())
+        try {{
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {{
+                vibrator?.vibrate(
+                    VibrationEffect.createOneShot(
+                        duration.toLong(), 
+                        VibrationEffect.DEFAULT_AMPLITUDE
+                    )
+                )
+            }} else {{
+                @Suppress("DEPRECATION")
+                vibrator?.vibrate(duration.toLong())
+            }}
+            callbackSuccess("vibrate", "Vibration déclenchée")
+        }} catch (e: Exception) {{
+            callbackError("vibrate", e.message ?: "Erreur de vibration")
         }}
     }}
 
     @JavascriptInterface
     fun copyToClipboard(text: String) {{
-        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-        val clip = android.content.ClipData.newPlainText("text", text)
-        clipboard.setPrimaryClip(clip)
+        try {{
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = ClipData.newPlainText("text", text)
+            clipboard.setPrimaryClip(clip)
+            callbackSuccess("copyToClipboard", "Texte copié")
+        }} catch (e: Exception) {{
+            callbackError("copyToClipboard", e.message ?: "Erreur de copie")
+        }}
+    }}
+    
+    @JavascriptInterface
+    fun showToast(message: String) {{
+        android.os.Handler(android.os.Looper.getMainLooper()).post {{
+            android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+        }}
+    }}
+    
+    private fun callbackSuccess(action: String, message: String) {{
+        val js = "if(window.NativiWeb && window.NativiWeb._handleNativeCallback) {{" +
+                 "window.NativiWeb._handleNativeCallback('$action', true, '$message');" +
+                 "}}"
+        webView.post {{
+            webView.evaluateJavascript(js, null)
+        }}
+    }}
+    
+    private fun callbackError(action: String, error: String) {{
+        val js = "if(window.NativiWeb && window.NativiWeb._handleNativeCallback) {{" +
+                 "window.NativiWeb._handleNativeCallback('$action', false, '$error');" +
+                 "}}"
+        webView.post {{
+            webView.evaluateJavascript(js, null)
+        }}
     }}
 }}
 """
+
+    # CONTINUATION: Méthodes iOS et utilitaires (à copier après les méthodes Android)
+    
+    def generate_ios_project(
+        self,
+        project_name: str,
+        bundle_identifier: str,
+        web_url: str,
+        features: List[Dict[str, Any]],
+        app_icon_url: Optional[str] = None
+    ) -> bytes:
+        """Génère un projet iOS complet et fonctionnel"""
+        zip_buffer = io.BytesIO()
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            base_dir = f"{project_name.replace(' ', '')}-iOS"
+            
+            # Fichiers iOS (garder votre implémentation actuelle ou améliorer)
+            # ... (garder votre code iOS existant)
+            
+        zip_buffer.seek(0)
+        return zip_buffer.read()
+    
+    def _generate_javascript_sdk(self, web_url: str, features: List[Dict[str, Any]], platform: str) -> str:
+        """Génère le SDK JavaScript personnalisé"""
+        enabled_features = [f.get("id") for f in features if f.get("enabled")]
+        
+        return f"""// NativiWeb SDK v1.0.0
+(function() {{
+    'use strict';
+    
+    const NativiWeb = {{
+        platform: '{platform}',
+        version: '1.0.0',
+        features: {json.dumps(enabled_features)},
+        
+        isNative: function() {{
+            return typeof window.NativiWebNative !== 'undefined';
+        }},
+        
+        vibrate: function(duration) {{
+            if (this.isNative() && window.NativiWebNative.vibrate) {{
+                window.NativiWebNative.vibrate(duration || 100);
+                return Promise.resolve();
+            }}
+            return Promise.reject('Not native');
+        }},
+        
+        copyToClipboard: function(text) {{
+            if (this.isNative() && window.NativiWebNative.copyToClipboard) {{
+                window.NativiWebNative.copyToClipboard(text);
+                return Promise.resolve();
+            }}
+            return navigator.clipboard.writeText(text);
+        }},
+        
+        getDeviceInfo: function() {{
+            if (this.isNative() && window.NativiWebNative.getDeviceInfo) {{
+                return Promise.resolve(JSON.parse(window.NativiWebNative.getDeviceInfo()));
+            }}
+            return Promise.resolve({{ platform: 'web', userAgent: navigator.userAgent }});
+        }},
+        
+        showToast: function(message) {{
+            if (this.isNative() && window.NativiWebNative.showToast) {{
+                window.NativiWebNative.showToast(message);
+                return Promise.resolve();
+            }}
+            console.log('Toast:', message);
+            return Promise.resolve();
+        }}
+    }};
+    
+    window.NativiWeb = NativiWeb;
+    console.log('NativiWeb SDK initialized on', NativiWeb.platform);
+}})();
+"""
+    
+    def _generate_android_readme(self, project_name: str, package_name: str, web_url: str) -> str:
+        """Génère README pour projet Android"""
+        safe_name = project_name.lower().replace(' ', '-')
+        return f"""# {project_name} - Android
+
+## Configuration
+- **Package**: {package_name}
+- **URL**: {web_url}
+
+## Compilation Rapide
+
+### Windows:
+```cmd
+build.bat
+```
+
+### Linux/Mac:
+```bash
+chmod +x build.sh
+./build.sh
+```
+
+L'APK sera dans: `app/build/outputs/apk/debug/app-debug.apk`
+
+## Installation
+1. Transférez l'APK sur votre téléphone
+2. Activez "Sources inconnues" dans Paramètres > Sécurité
+3. Ouvrez l'APK pour l'installer
+
+## Plus d'infos
+- Utilisez Android Studio pour le développement avancé
+- Min SDK: Android 7.0 (API 24)
+- Target SDK: Android 14 (API 34)
+"""
+
+ # ========== MÉTHODES iOS COMPLÈTES ==========
+    # À ajouter à la fin de la classe NativeTemplateGenerator dans generator.py
+    
+    def generate_ios_project(
+        self,
+        project_name: str,
+        bundle_identifier: str,
+        web_url: str,
+        features: List[Dict[str, Any]],
+        app_icon_url: Optional[str] = None
+    ) -> bytes:
+        """
+        Génère un projet iOS complet et fonctionnel
+        
+        Args:
+            project_name: Nom de l'application
+            bundle_identifier: Bundle ID (ex: com.example.app)
+            web_url: URL de l'application web
+            features: Liste des fonctionnalités activées
+            app_icon_url: URL de l'icône de l'application
+            
+        Returns:
+            Bytes du fichier ZIP contenant le projet iOS complet
+        """
+        zip_buffer = io.BytesIO()
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            base_dir = f"{project_name.replace(' ', '')}-iOS"
+            
+            # 1. ContentView.swift - Vue principale avec WebView
+            content_view = self._generate_content_view(bundle_identifier, web_url, features)
+            zip_file.writestr(f"{base_dir}/{project_name.replace(' ', '')}/ContentView.swift", content_view)
+            
+            # 2. App.swift - Point d'entrée de l'application
+            app_swift = self._generate_app_swift(project_name)
+            zip_file.writestr(f"{base_dir}/{project_name.replace(' ', '')}/App.swift", app_swift)
+            
+            # 3. NativiWebBridge.swift - Bridge pour communiquer avec le WebView
+            bridge_swift = self._generate_ios_bridge(bundle_identifier, features)
+            zip_file.writestr(f"{base_dir}/{project_name.replace(' ', '')}/NativiWebBridge.swift", bridge_swift)
+            
+            # 4. Info.plist
+            info_plist = self._generate_info_plist(bundle_identifier, project_name, features)
+            zip_file.writestr(f"{base_dir}/{project_name.replace(' ', '')}/Info.plist", info_plist)
+            
+            # 5. project.pbxproj - Fichier de projet Xcode
+            project_file = self._generate_xcode_project(project_name, bundle_identifier)
+            zip_file.writestr(f"{base_dir}/{project_name.replace(' ', '')}.xcodeproj/project.pbxproj", project_file)
+            
+            # 6. SDK JavaScript personnalisé
+            sdk_js = self._generate_javascript_sdk(web_url, features, "ios")
+            zip_file.writestr(f"{base_dir}/{project_name.replace(' ', '')}/Assets/nativiweb-sdk.js", sdk_js)
+            
+            # 7. README.md
+            readme = self._generate_ios_readme(project_name, bundle_identifier, web_url)
+            zip_file.writestr(f"{base_dir}/README.md", readme)
+            
+            # 8. Podfile pour CocoaPods (si nécessaire)
+            podfile = self._generate_podfile(project_name)
+            zip_file.writestr(f"{base_dir}/Podfile", podfile)
+            
+        zip_buffer.seek(0)
+        return zip_buffer.read()
     
     def _generate_content_view(self, bundle_id: str, web_url: str, features: List[Dict[str, Any]]) -> str:
         """Génère ContentView.swift pour iOS"""
@@ -569,6 +920,39 @@ class NativiWebBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNav
                     UIPasteboard.general.string = text
                 }
                 
+            case "getDeviceInfo":
+                let info: [String: Any] = [
+                    "platform": "ios",
+                    "platformVersion": UIDevice.current.systemVersion,
+                    "deviceModel": UIDevice.current.model,
+                    "manufacturer": "Apple",
+                    "appVersion": "1.0.0",
+                    "sdkVersion": "1.0.0",
+                    "isNative": true
+                ]
+                // Callback vers JavaScript avec les infos
+                if let webView = message.webView {
+                    let jsonData = try? JSONSerialization.data(withJSONObject: info)
+                    let jsonString = String(data: jsonData ?? Data(), encoding: .utf8) ?? "{}"
+                    let js = "if(window.NativiWeb && window.NativiWeb._handleNativeCallback) { window.NativiWeb._handleNativeCallback('getDeviceInfo', true, \\(jsonString)); }"
+                    webView.evaluateJavaScript(js, completionHandler: nil)
+                }
+                
+            case "showToast":
+                if let text = body["message"] as? String {
+                    // iOS ne supporte pas les toasts natifs, utiliser une alerte simple
+                    DispatchQueue.main.async {
+                        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                           let rootVC = windowScene.windows.first?.rootViewController {
+                            let alert = UIAlertController(title: nil, message: text, preferredStyle: .alert)
+                            rootVC.present(alert, animated: true)
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                alert.dismiss(animated: true)
+                            }
+                        }
+                    }
+                }
+                
             default:
                 break
             }
@@ -576,7 +960,12 @@ class NativiWebBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNav
     }
     
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        // Injecter le SDK si nécessaire
+        // Page chargée
+    }
+    
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        // Erreur de chargement
+        print("WebView error: \\(error.localizedDescription)")
     }
 }
 """
@@ -606,7 +995,7 @@ class NativiWebBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNav
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
-    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <string>{bundle_id}</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -646,16 +1035,34 @@ class NativiWebBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNav
     
     def _generate_xcode_project(self, app_name: str, bundle_id: str) -> str:
         """Génère un fichier de projet Xcode basique"""
+        app_name_clean = app_name.replace(" ", "")
         # Format simplifié - en production, utiliser XcodeGen ou générer correctement
         return f"""// !$*UTF8*$!
 {{
-	archiveVersion = 1;
-	classes = {{
-	}};
-	objectVersion = 56;
-	objects = {{
-	}};
-	rootObject = 1234567890ABCDEF /* Project object */;
+    archiveVersion = 1;
+    classes = {{
+    }};
+    objectVersion = 56;
+    objects = {{
+        /* Begin PBXBuildFile section */
+        /* End PBXBuildFile section */
+        
+        /* Begin PBXFileReference section */
+        /* End PBXFileReference section */
+        
+        /* Begin PBXGroup section */
+        /* End PBXGroup section */
+        
+        /* Begin PBXNativeTarget section */
+        /* End PBXNativeTarget section */
+        
+        /* Begin PBXProject section */
+        /* End PBXProject section */
+        
+        /* Begin XCBuildConfiguration section */
+        /* End XCBuildConfiguration section */
+    }};
+    rootObject = 1234567890ABCDEF /* Project object */;
 }}
 """
     
@@ -671,159 +1078,11 @@ target '{app_name.replace(" ", "")}' do
 end
 """
     
-    def _generate_javascript_sdk(self, web_url: str, features: List[Dict[str, Any]], platform: str) -> str:
-        """Génère le SDK JavaScript personnalisé"""
-        enabled_features = [f.get("id") for f in features if f.get("enabled")]
-        
-        return f"""// NativiWeb SDK v1.0.0
-// Généré automatiquement pour {platform}
-
-(function() {{
-    'use strict';
-    
-    const NativiWeb = {{
-        platform: '{platform}',
-        version: '1.0.0',
-        features: {json.dumps(enabled_features)},
-        
-        isNative: function() {{
-            return typeof window.NativiWebNative !== 'undefined';
-        }},
-        
-        callNative: function(action, data) {{
-            if (!this.isNative()) {{
-                console.warn('NativiWeb: Not running in native app');
-                return Promise.reject(new Error('Not native'));
-            }}
-            
-            return new Promise((resolve, reject) => {{
-                const callbackId = 'callback_' + Date.now() + '_' + Math.random();
-                window[callbackId] = {{ resolve, reject }};
-                
-                if (window.NativiWebNative && window.NativiWebNative.postMessage) {{
-                    window.NativiWebNative.postMessage(JSON.stringify({{
-                        action: action,
-                        data: data || {{}},
-                        callbackId: callbackId
-                    }}));
-                }} else {{
-                    reject(new Error('Native bridge not available'));
-                }}
-                
-                setTimeout(() => {{
-                    if (window[callbackId]) {{
-                        delete window[callbackId];
-                        reject(new Error('Timeout'));
-                    }}
-                }}, 10000);
-            }});
-        }},
-        
-        vibrate: function(duration) {{
-            if (this.isNative()) {{
-                return this.callNative('vibrate', {{ duration: duration || 100 }});
-            }}
-        }},
-        
-        copyToClipboard: function(text) {{
-            if (this.isNative()) {{
-                return this.callNative('copyToClipboard', {{ text: text }});
-            }} else {{
-                return navigator.clipboard.writeText(text);
-            }}
-        }},
-        
-        getDeviceInfo: function() {{
-            if (this.isNative()) {{
-                return this.callNative('getDeviceInfo');
-            }} else {{
-                return Promise.resolve({{
-                    platform: 'web',
-                    userAgent: navigator.userAgent
-                }});
-            }}
-        }}
-    }};
-    
-    // Exposer globalement
-    window.NativiWeb = NativiWeb;
-    
-    // Auto-initialisation
-    if (document.readyState === 'loading') {{
-        document.addEventListener('DOMContentLoaded', function() {{
-            console.log('NativiWeb SDK initialized on', NativiWeb.platform);
-        }});
-    }} else {{
-        console.log('NativiWeb SDK initialized on', NativiWeb.platform);
-    }}
-}})();
-"""
-    
-    def _generate_android_readme(self, project_name: str, package_name: str, web_url: str) -> str:
-        """Génère README pour projet Android"""
-        return f"""# {project_name} - Android
-
-## 📱 Projet Android généré par NativiWeb Studio
-
-### Configuration
-- **Package**: {package_name}
-- **URL Web**: {web_url}
-- **Plateforme**: Android
-
-## 🚀 Instructions de compilation
-
-### Prérequis
-- Android Studio Hedgehog (2023.1.1) ou supérieur
-- JDK 17 ou supérieur
-- Android SDK avec API Level 34
-
-### Étapes
-
-1. **Ouvrir le projet**
-   ```bash
-   # Décompresser l'archive
-   unzip {project_name.lower().replace(' ', '-')}-android.zip
-   
-   # Ouvrir dans Android Studio
-   File > Open > Sélectionner le dossier du projet
-   ```
-
-2. **Synchroniser Gradle**
-   - Android Studio va automatiquement synchroniser les dépendances
-   - Attendre la fin de la synchronisation
-
-3. **Configurer le SDK**
-   - File > Project Structure > SDK Location
-   - Vérifier que Android SDK est configuré
-
-4. **Compiler et exécuter**
-   - Connecter un appareil Android ou démarrer un émulateur
-   - Cliquer sur Run (▶️) ou appuyer sur Shift+F10
-   - L'app va se compiler et s'installer sur l'appareil
-
-5. **Générer un APK**
-   ```
-   Build > Build Bundle(s) / APK(s) > Build APK(s)
-   ```
-   L'APK sera dans `app/build/outputs/apk/debug/app-debug.apk`
-
-### ⚠️ Important
-
-- Pour la production, configurez un keystore pour signer l'APK
-- Modifiez `versionCode` et `versionName` dans `app/build.gradle`
-- Testez toutes les fonctionnalités natives sur un appareil réel
-
-## 📚 Documentation
-
-Pour plus d'informations, consultez:
-- [NativiWeb Studio Documentation](https://docs.nativiweb.io)
-- [Android Developer Guide](https://developer.android.com)
-"""
-    
     def _generate_ios_readme(self, project_name: str, bundle_id: str, web_url: str) -> str:
         """Génère README pour projet iOS"""
         app_name_clean = project_name.replace(" ", "")
-        return f"""# {project_name} - iOS
+        # IMPORTANT: Utiliser des guillemets simples pour éviter les conflits
+        readme_content = f"""# {project_name} - iOS
 
 ## 📱 Projet iOS généré par NativiWeb Studio
 
@@ -836,46 +1095,46 @@ Pour plus d'informations, consultez:
 
 ### Prérequis
 - macOS avec Xcode 15.0 ou supérieur
-- CocoaPods installé (`sudo gem install cocoapods`)
+- CocoaPods installé (sudo gem install cocoapods)
 - Compte développeur Apple (pour tester sur appareil)
 
 ### Étapes
 
 1. **Ouvrir le projet**
-   ```bash
-   # Décompresser l'archive
-   unzip {app_name_clean}-iOS.zip
-   cd {app_name_clean}-iOS
-   
-   # Installer les dépendances (si nécessaire)
-   pod install
-   
-   # Ouvrir le workspace
-   open {app_name_clean}.xcworkspace
-   # OU ouvrir directement le projet
-   open {app_name_clean}.xcodeproj
-   ```
+```bash
+# Décompresser l'archive
+unzip {app_name_clean}-iOS.zip
+cd {app_name_clean}-iOS
+
+# Installer les dépendances (si nécessaire)
+pod install
+
+# Ouvrir le workspace
+open {app_name_clean}.xcworkspace
+# OU ouvrir directement le projet
+open {app_name_clean}.xcodeproj
+```
 
 2. **Configurer le projet**
-   - Sélectionner le projet dans le navigateur
-   - Onglet "Signing & Capabilities"
-   - Sélectionner votre Team
-   - Vérifier que le Bundle Identifier est correct
+- Sélectionner le projet dans le navigateur
+- Onglet "Signing & Capabilities"
+- Sélectionner votre Team
+- Vérifier que le Bundle Identifier est correct
 
 3. **Configurer les permissions**
-   - Si des fonctionnalités natives sont activées, vérifier Info.plist
-   - Les descriptions de permissions doivent être présentes
+- Si des fonctionnalités natives sont activées, vérifier Info.plist
+- Les descriptions de permissions doivent être présentes
 
 4. **Compiler et exécuter**
-   - Sélectionner un simulateur ou un appareil connecté
-   - Cliquer sur Run (▶️) ou appuyer sur Cmd+R
-   - L'app va se compiler et s'exécuter
+- Sélectionner un simulateur ou un appareil connecté
+- Cliquer sur Run (▶️) ou appuyer sur Cmd+R
+- L'app va se compiler et s'exécuter
 
 5. **Générer un IPA (pour TestFlight/App Store)**
-   ```
-   Product > Archive
-   ```
-   Puis utiliser Organizer pour exporter l'IPA
+```
+Product > Archive
+```
+Puis utiliser Organizer pour exporter l'IPA
 
 ### ⚠️ Important
 
@@ -889,4 +1148,4 @@ Pour plus d'informations, consultez:
 - [NativiWeb Studio Documentation](https://docs.nativiweb.io)
 - [Apple Developer Documentation](https://developer.apple.com/documentation)
 """
-
+        return readme_content

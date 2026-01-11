@@ -7,12 +7,13 @@ import './globals.css'
 export const metadata: Metadata = {
   title: 'NativiWeb Studio',
   description: 'Transform your web apps into native mobile applications',
-  viewport: {
-    width: 'device-width',
-    initialScale: 1,
-    maximumScale: 5,
-    userScalable: true,
-  },
+}
+
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 5,
+  userScalable: true,
   themeColor: '#050505',
 }
 

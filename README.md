@@ -45,7 +45,9 @@ nativify-web/
 
 - Python 3.9+
 - Node.js 18+
-- MongoDB
+- Supabase account (free tier works)
+- **Java JDK 17+** (pour compiler des APKs - voir [Guide de Configuration](GUIDE_CONFIGURATION_JAVA_ANDROID.md))
+- **Android SDK** (optionnel mais recommandé pour des builds plus rapides)
 
 ### Installation
 
@@ -113,6 +115,22 @@ npm run dev:frontend
 # Terminal 2 - Backend
 npm run dev:backend
 ```
+
+### Configuration pour Compiler des APKs
+
+Pour activer la compilation automatique d'APKs Android, vous devez installer et configurer Java JDK 17+ :
+
+**Méthode Rapide :**
+```powershell
+.\scripts\setup-java-android.ps1
+```
+
+**Vérification :**
+```powershell
+.\scripts\check-build-dependencies.ps1
+```
+
+📖 **Guide complet :** Voir [GUIDE_CONFIGURATION_JAVA_ANDROID.md](GUIDE_CONFIGURATION_JAVA_ANDROID.md)
 
 ## 📱 Supported Native Features
 

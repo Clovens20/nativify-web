@@ -3,6 +3,7 @@
 import { useEffect } from 'react'
 import { usePathname } from 'next/navigation'
 import { useAuth } from '@/context/AuthContext'
+import { logger } from '@/lib/logger'
 
 // Fonction pour détecter le type d'appareil
 function getDeviceType(): string {
@@ -83,8 +84,12 @@ export function useTrackVisit() {
       }
 
       // Envoyer au backend de manière asynchrone (ne pas bloquer)
-      const API_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
-      fetch(`${API_URL}/api/track-visit`, {
+      // In development, use relative URL (proxied by Next.js)
+      // In production, use absolute URL from env variable
+      const API_URL = process.env.NODE_ENV === 'production'
+        ? (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000') + '/api'
+        : '/api'
+      fetch(`${API_URL}/track-visit`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -92,11 +97,11 @@ export function useTrackVisit() {
         body: JSON.stringify(visitData),
       }).catch((error) => {
         // Ignorer les erreurs silencieusement pour ne pas perturber l'expérience utilisateur
-        console.debug('Visit tracking error:', error)
+        logger.debug('Visit tracking error', { error })
       })
     } catch (error) {
       // Ignorer les erreurs silencieusement
-      console.debug('Visit tracking error:', error)
+      logger.debug('Visit tracking error', { error })
     }
   }
 }

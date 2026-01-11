@@ -4,8 +4,13 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 import { createClient } from '@/lib/supabase'
 import { User, Session } from '@supabase/supabase-js'
 import axios from 'axios'
+import { logger } from '@/lib/logger'
 
-const API_URL = (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000') + '/api'
+// In development, use relative URL (proxied by Next.js)
+// In production, use absolute URL from env variable
+const API_URL = process.env.NODE_ENV === 'production'
+  ? (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000') + '/api'
+  : '/api'
 
 interface UserProfile {
   id: string
@@ -49,7 +54,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         const { data: { session: currentSession }, error: sessionError } = await supabase.auth.getSession()
         
         if (sessionError) {
-          console.error('Session error:', sessionError)
+          logger.error('Session error', sessionError, { context: 'initAuth' })
           // Si erreur de session, nettoyer et forcer logout
           await supabase.auth.signOut()
           if (mounted) {
@@ -62,7 +67,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         
         if (currentSession?.user && mounted) {
           const userEmail = currentSession.user.email
-          console.log('[Auth] Initializing session for:', userEmail)
+          logger.info('Initializing session', { email: userEmail })
           
           setSession(currentSession)
           
@@ -77,7 +82,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             
             // Vérifier que l'email correspond bien
             if (response.data?.email && response.data.email !== userEmail) {
-              console.warn('[Auth] Email mismatch! Session:', userEmail, 'Backend:', response.data.email)
+              logger.warn('Email mismatch', { sessionEmail: userEmail, backendEmail: response.data.email })
               // Forcer logout et nettoyer
               await supabase.auth.signOut()
               if (mounted) {
@@ -93,7 +98,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           } catch (error: any) {
             // Ne pas afficher d'erreur si c'est juste une erreur de connexion (backend non démarré)
             if (error.code !== 'ECONNREFUSED' && !error.message?.includes('Network Error') && !error.message?.includes('ERR_CONNECTION_REFUSED')) {
-              console.error('[Auth] Failed to fetch user profile:', error)
+              logger.error('Failed to fetch user profile', error, { email: userEmail })
             }
             // Utiliser les données Supabase comme fallback
             if (mounted) {
@@ -110,7 +115,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           setSession(null)
         }
       } catch (error) {
-        console.error('[Auth] Init error:', error)
+        logger.error('Init error', error, { context: 'initAuth' })
         if (mounted) {
           setUser(null)
           setSession(null)
@@ -128,7 +133,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       // Éviter les boucles : ignorer les événements si on est en train de se déconnecter
       if (!mounted) return
       
-      console.log('[Auth] Auth state changed:', event, 'User:', newSession?.user?.email)
+      logger.debug('Auth state changed', { event, email: newSession?.user?.email })
       
       // Si c'est un SIGNED_OUT, nettoyer immédiatement
       if (event === 'SIGNED_OUT' || !newSession) {
@@ -160,7 +165,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         
         // Si on a déjà un utilisateur connecté et que l'email est différent, ne pas changer automatiquement
         if (currentUserEmail && currentUserEmail !== newUserEmail && event !== 'TOKEN_REFRESHED') {
-          console.warn('[Auth] User switch detected! Current:', currentUserEmail, 'New:', newUserEmail, '- Ignoring')
+          logger.warn('User switch detected - ignoring', { current: currentUserEmail, new: newUserEmail, event })
           // Ne pas changer, garder l'utilisateur actuel
           return
         }
@@ -181,7 +186,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           
           // Vérifier que l'email correspond
           if (response.data?.email && response.data.email !== newUserEmail) {
-            console.warn('[Auth] Email mismatch in state change! Session:', newUserEmail, 'Backend:', response.data.email)
+            logger.warn('Email mismatch in state change', { sessionEmail: newUserEmail, backendEmail: response.data.email, event })
             // Ne pas forcer logout, juste logger
           }
           
@@ -191,7 +196,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         } catch (error: any) {
           // Si erreur 401, ne pas utiliser le fallback (pour éviter les boucles)
           if (error.response?.status === 401) {
-            console.warn('[Auth] 401 error when fetching user profile, keeping current user')
+            logger.warn('401 error when fetching user profile - keeping current user', { email: newUserEmail, event })
             // Ne pas changer l'utilisateur si on a une erreur 401
             return
           }
@@ -224,7 +229,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       // Vérifier s'il y a déjà une session active avec un autre utilisateur
       const { data: { session: existingSession } } = await supabase.auth.getSession()
       if (existingSession?.user && existingSession.user.email !== email) {
-        console.log('[Auth] Logging out previous user:', existingSession.user.email)
+        logger.info('Logging out previous user', { previousEmail: existingSession.user.email, newEmail: email })
         // Nettoyer la session précédente
         await supabase.auth.signOut({ scope: 'global' })
         // Nettoyer le localStorage
@@ -239,7 +244,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         await new Promise(resolve => setTimeout(resolve, 500))
       }
       
-      console.log('[Auth] Logging in user:', email)
+      logger.info('Logging in user', { email })
       
       const response = await axios.post(`${API_URL}/auth/login`, { email, password }, { timeout: 10000 })
       const { token, user: userData } = response.data
@@ -253,13 +258,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       const { data: supabaseAuth, error: supabaseError } = await supabase.auth.signInWithPassword({ email, password })
       
       if (supabaseError) {
-        console.error('[Auth] Supabase login error:', supabaseError)
+        logger.error('Supabase login error', supabaseError, { email })
         throw new Error('Failed to establish session')
       }
       
       // Vérifier que l'email de la session Supabase correspond
       if (supabaseAuth?.user?.email !== email) {
-        console.error('[Auth] Email mismatch after Supabase login')
+        logger.error('Email mismatch after Supabase login', undefined, { expected: email, actual: supabaseAuth?.user?.email })
         await supabase.auth.signOut()
         throw new Error('Session email mismatch')
       }
@@ -267,7 +272,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setUser(userData)
       return userData
     } catch (error: any) {
-      console.error('[Auth] Login error:', error)
+      logger.error('Login error', error, { email })
       if (error.code === 'ECONNREFUSED' || error.message?.includes('Network Error') || error.message?.includes('ERR_CONNECTION_REFUSED') || error.isConnectionError) {
         throw new Error('Le serveur backend n\'est pas disponible. Veuillez démarrer le serveur avec: npm run dev')
       }
@@ -281,8 +286,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       return response.data
     } catch (error: any) {
       // Log detailed error for debugging
-      console.error('Registration error:', {
-        message: error.message,
+      logger.error('Registration error', error, {
         response: error.response?.data,
         status: error.response?.status,
         url: `${API_URL}/auth/register`,
@@ -295,7 +299,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         throw new Error(error.response.data?.detail || error.response.data?.message || 'Registration failed')
       } else if (error.request) {
         // Request made but no response (backend not running or CORS issue)
-        throw new Error('Cannot connect to server. Please make sure the backend is running on ' + (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'))
+        const backendUrl = typeof window !== 'undefined' && process.env.NODE_ENV === 'production'
+          ? (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000')
+          : 'http://localhost:8000'
+        throw new Error('Cannot connect to server. Please make sure the backend is running on ' + backendUrl)
       } else {
         // Error setting up request
         throw new Error(error.message || 'Registration failed')
@@ -305,7 +312,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const logout = async () => {
     try {
-      console.log('[Auth] Logging out user:', user?.email)
+      logger.info('Logging out user', { email: user?.email })
       
       // Nettoyer d'abord l'état local
       setUser(null)
@@ -321,7 +328,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             timeout: 3000
           })
         } catch (error) {
-          console.error('[Auth] Backend logout error (ignored):', error)
+          logger.error('Backend logout error (ignored)', error, { email: user?.email })
         }
       }
       
@@ -338,7 +345,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         })
       }
     } catch (error) {
-      console.error('[Auth] Logout error:', error)
+      logger.error('Logout error', error, { email: user?.email })
       // Forcer le nettoyage même en cas d'erreur
       setUser(null)
       setSession(null)

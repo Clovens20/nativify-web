@@ -16,6 +16,7 @@ import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { adminApi, featuresApi } from '@/lib/api'
 import { toast } from 'sonner'
+import { logger } from '@/lib/logger'
 import { 
   Users, 
   Hammer, 
@@ -203,13 +204,13 @@ export default function AdminPage() {
 
   const fetchAdminData = useCallback(async () => {
     if (!user?.id) {
-      console.warn('[Admin] No user ID available')
+      logger.warn('No user ID available', { context: 'fetchAdminData' })
       return
     }
     
     // Ne plus faire router.push ici pour éviter le warning React
     if (user.role !== 'admin') {
-      console.warn('[Admin] User is not admin, skipping fetch')
+      logger.warn('User is not admin, skipping fetch', { userId: user.id, role: user.role })
       return
     }
 
@@ -231,7 +232,7 @@ export default function AdminPage() {
               throw error;
             }
             
-            console.warn(`[Admin] Retry ${i + 1}/${retries} after ${delay}ms`);
+            logger.warn(`Retry ${i + 1}/${retries} after ${delay}ms`, { retry: i + 1, totalRetries: retries, delay })
             await new Promise(resolve => setTimeout(resolve, delay * (i + 1)));
           }
         }
@@ -297,9 +298,7 @@ export default function AdminPage() {
         toast.error('Admin access required')
         router.push('/dashboard')
       } else {
-        console.error('Failed to fetch admin data:', error)
-        console.error('Error details:', {
-          message: error.message,
+        logger.error('Failed to fetch admin data', error, {
           response: error.response?.data,
           status: error.response?.status,
           url: error.config?.url
@@ -311,7 +310,7 @@ export default function AdminPage() {
         
         // Afficher les données partielles si disponibles
         if (error.response?.data) {
-          console.log('Partial data received:', error.response.data)
+          logger.info('Partial data received', { data: error.response.data })
         }
       }
     } finally {
@@ -378,7 +377,7 @@ export default function AdminPage() {
       await fetchAdminData()
     } catch (error: any) {
       toast.error(error.response?.data?.detail || 'Erreur lors de la création de l\'utilisateur')
-      console.error('Error creating user:', error)
+      logger.error('Error creating user', error, { userData: newUserData })
     }
   }
 
@@ -396,7 +395,7 @@ export default function AdminPage() {
       await fetchAdminData()
     } catch (error: any) {
       toast.error(error.response?.data?.detail || 'Erreur lors de la mise à jour de l\'utilisateur')
-      console.error('Error updating user:', error)
+      logger.error('Error updating user', error, { userId, updates })
     }
   }
 
@@ -410,7 +409,7 @@ export default function AdminPage() {
       await fetchAdminData()
     } catch (error: any) {
       toast.error(error.response?.data?.detail || 'Erreur lors de la suppression de l\'utilisateur')
-      console.error('Error deleting user:', error)
+      logger.error('Error deleting user', error, { userId })
     }
   }
 
@@ -424,7 +423,7 @@ export default function AdminPage() {
       await fetchAdminData()
     } catch (error: any) {
       toast.error(error.response?.data?.detail || 'Erreur lors de la suppression du projet')
-      console.error('Error deleting project:', error)
+      logger.error('Error deleting project', error, { projectId })
     }
   }
   
@@ -458,7 +457,7 @@ export default function AdminPage() {
       await fetchAdminData()
     } catch (error: any) {
       toast.error(error.response?.data?.detail || 'Erreur lors de la création du template')
-      console.error('Error creating template:', error)
+      logger.error('Error creating template', error, { templateData: newTemplateData })
     }
   }
 
@@ -471,7 +470,7 @@ export default function AdminPage() {
       await fetchAdminData()
     } catch (error: any) {
       toast.error(error.response?.data?.detail || 'Erreur lors de la mise à jour du template')
-      console.error('Error updating template:', error)
+      logger.error('Error updating template', error, { templateId, updates })
     }
   }
 
@@ -485,7 +484,7 @@ export default function AdminPage() {
       await fetchAdminData()
     } catch (error: any) {
       toast.error(error.response?.data?.detail || 'Erreur lors de la suppression du template')
-      console.error('Error deleting template:', error)
+      logger.error('Error deleting template', error, { templateId })
     }
   }
 
@@ -512,7 +511,7 @@ export default function AdminPage() {
       toast.success('Configuration mise à jour avec succès')
     } catch (error: any) {
       toast.error(error.response?.data?.detail || 'Erreur lors de la mise à jour de la configuration')
-      console.error('Error updating config:', error)
+      logger.error('Error updating config', error, { config })
     }
   }
   

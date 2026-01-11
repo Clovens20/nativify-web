@@ -3,6 +3,7 @@
 import { useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
+import { logger } from '@/lib/logger'
 
 export default function AuthCallbackPage() {
   const router = useRouter()
@@ -18,7 +19,7 @@ export default function AuthCallbackPage() {
         const { error } = await supabase.auth.exchangeCodeForSession(code)
         
         if (error) {
-          console.error('Auth callback error:', error)
+          logger.error('Auth callback error', error, { context: 'oauth_callback' })
           router.push('/login?error=auth_failed')
         } else {
           router.push('/dashboard')
