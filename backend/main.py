@@ -2675,7 +2675,13 @@ app.add_middleware(
     allow_origins=cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
+    expose_headers=[
+        "Content-Disposition",  # Important pour le nom du fichier
+        "Content-Type",
+        "Content-Length",
+        "X-Build-Type",
+        "X-APK-Size"
+    ],
     max_age=3600,
 )
 

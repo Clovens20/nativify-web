@@ -211,6 +211,96 @@ export const buildsApi = {
     }
   },
   
+  /**
+   * Télécharge un build avec indicateur de progression
+   * Utilise fetch directement pour le streaming avec progression
+   */
+  downloadWithProgress: async (
+    buildId: string,
+    onProgress?: (progress: number, loaded: number, total: number) => void
+  ): Promise<{ blob: Blob; filename: string }> => {
+    try {
+      logger.info(`📥 Démarrage du téléchargement avec progression du build ${buildId}...`);
+      
+      // Récupérer le token depuis la session
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      
+      if (!token) {
+        throw new Error('Vous devez être connecté pour télécharger');
+      }
+      
+      // Utiliser fetch pour le streaming avec progression
+      const BACKEND_URL = process.env.NODE_ENV === 'production' 
+        ? (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000')
+        : 'http://localhost:8000';
+      
+      const response = await fetch(`${BACKEND_URL}/api/builds/${buildId}/download`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+      
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ 
+          detail: `HTTP ${response.status}: ${response.statusText}` 
+        }));
+        throw new Error(error.detail || 'Échec du téléchargement');
+      }
+      
+      // Récupérer la taille totale
+      const contentLength = response.headers.get('Content-Length');
+      const total = contentLength ? parseInt(contentLength, 10) : 0;
+      
+      logger.info(`📊 Taille totale: ${(total / 1024 / 1024).toFixed(2)} MB`);
+      
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('Streaming non supporté');
+      
+      const chunks: Uint8Array[] = [];
+      let receivedLength = 0;
+      
+      // Lire le stream chunk par chunk
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) break;
+        
+        chunks.push(value);
+        receivedLength += value.length;
+        
+        // Notifier la progression
+        if (onProgress && total > 0) {
+          const progress = (receivedLength / total) * 100;
+          onProgress(progress, receivedLength, total);
+        }
+      }
+      
+      logger.info('✅ Téléchargement terminé, assemblage du fichier...');
+      
+      // Combiner tous les chunks en un seul blob
+      const blob = new Blob(chunks as BlobPart[]);
+      
+      // Extraire le nom du fichier depuis les headers
+      const contentDisposition = response.headers.get('Content-Disposition');
+      let filename = `build-${buildId}.apk`;
+      
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        if (match && match[1]) {
+          filename = match[1].replace(/['"]/g, '');
+        }
+      }
+      
+      return { blob, filename };
+    } catch (error) {
+      logger.error('❌ Erreur de téléchargement avec progression:', error);
+      throw error;
+    }
+  },
+  
   delete: async (buildId: string) => {
     const response = await apiClient.delete(`/builds/${buildId}`);
     // Invalider le cache des builds si nécessaire

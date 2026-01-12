@@ -14,6 +14,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { projectsApi, buildsApi, featuresApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { logger } from '@/lib/logger'
+import { useDownload } from '@/hooks/useDownload'
 import { 
   Globe, 
   Smartphone, 
@@ -74,6 +75,7 @@ export default function ProjectDetailPage() {
   const router = useRouter()
   const params = useParams()
   const projectId = params.id as string
+  const { download, isDownloading, progress } = useDownload()
   
   const [project, setProject] = useState<Project | null>(null)
   const [builds, setBuilds] = useState<Build[]>([])
@@ -615,26 +617,20 @@ export default function ProjectDetailPage() {
                                     ? 'hover:bg-success/10 hover:border-success/30' 
                                     : 'hover:bg-info/10 hover:border-info/30'
                                 }`}
-                                onClick={async () => {
-                                  try {
-                                    const blob = await buildsApi.download(build.id)
-                                    const url = window.URL.createObjectURL(blob)
-                                    const a = document.createElement('a')
-                                    a.href = url
-                                    a.download = `app-${build.platform}-${Date.now()}.${build.platform === 'android' ? 'apk' : 'ipa'}`
-                                    document.body.appendChild(a)
-                                    a.click()
-                                    window.URL.revokeObjectURL(url)
-                                    document.body.removeChild(a)
-                                    toast.success('Téléchargement démarré !')
-                                  } catch (error: any) {
-                                    logger.error('Erreur de téléchargement', error, { buildId: build.id, platform: build.platform })
-                                    toast.error(error.response?.data?.detail || 'Erreur lors du téléchargement')
-                                  }
-                                }}
+                                onClick={() => download(build.id)}
+                                disabled={isDownloading}
                               >
-                                <Download className="w-4 h-4 mr-1" />
-                                {build.platform === 'android' ? 'APK' : 'IPA'}
+                                {isDownloading ? (
+                                  <>
+                                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                                    {progress.toFixed(0)}%
+                                  </>
+                                ) : (
+                                  <>
+                                    <Download className="w-4 h-4 mr-1" />
+                                    {build.platform === 'android' ? 'APK' : 'IPA'}
+                                  </>
+                                )}
                               </Button>
                               {build.platform === 'android' ? (
                                 <Button 

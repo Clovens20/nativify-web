@@ -11,6 +11,7 @@ import { Progress } from '@/components/ui/progress'
 import { buildsApi, projectsApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { logger } from '@/lib/logger'
+import { useDownload } from '@/hooks/useDownload'
 import { 
   Smartphone, 
   Apple, 
@@ -63,6 +64,7 @@ interface Project {
 export default function BuildsPage() {
   const { user, loading: authLoading } = useAuth()
   const router = useRouter()
+  const { download, isDownloading, progress } = useDownload()
   const [builds, setBuilds] = useState<Build[]>([])
   const [projects, setProjects] = useState<Record<string, Project>>({})
   const [loading, setLoading] = useState(true)
@@ -88,10 +90,56 @@ export default function BuildsPage() {
       
       // Create a map of projects
       const projectsMap: Record<string, Project> = {}
-      projectsData.forEach((p: Project) => {
-        projectsMap[p.id] = p
-      })
+      if (projectsData && Array.isArray(projectsData)) {
+        projectsData.forEach((p: Project) => {
+          if (p && p.id && p.name) {
+            projectsMap[p.id] = p
+          }
+        })
+      }
+      
+      // Charger les projets manquants pour les builds qui n'ont pas de projet dans la map
+      if (buildsData && buildsData.length > 0) {
+        const missingProjectIds = new Set<string>()
+        buildsData.forEach((b: Build) => {
+          if (b.project_id && !projectsMap[b.project_id]) {
+            missingProjectIds.add(b.project_id)
+          }
+        })
+        
+        // Charger chaque projet manquant
+        if (missingProjectIds.size > 0) {
+          const missingProjectsPromises = Array.from(missingProjectIds).map(async (projectId: string) => {
+            try {
+              const project = await projectsApi.getOne(projectId, true)
+              if (project && project.id && project.name) {
+                projectsMap[project.id] = project
+              }
+            } catch (error) {
+              // Projet peut-être supprimé ou inaccessible, on l'ignore
+              logger.debug('Project not found', { projectId })
+            }
+          })
+          
+          await Promise.all(missingProjectsPromises)
+        }
+      }
+      
       setProjects(projectsMap)
+      
+      // Log pour débugger si nécessaire
+      if (buildsData && buildsData.length > 0) {
+        const stillMissing = buildsData.filter((b: Build) => !projectsMap[b.project_id])
+        if (stillMissing.length > 0) {
+          const uniqueMissingIds = Array.from(new Set(stillMissing.map((b: Build) => b.project_id)))
+          logger.warn('Some builds have missing projects (after loading)', {
+            missingCount: stillMissing.length,
+            missingProjectIds: uniqueMissingIds,
+            totalProjects: Object.keys(projectsMap).length,
+            totalBuilds: buildsData.length
+          })
+        }
+      }
     } catch (error: any) {
       logger.error('Failed to fetch builds', error, { userId: user?.id })
       if (error.isConnectionError) {
@@ -182,7 +230,7 @@ export default function BuildsPage() {
           <DialogHeader>
             <DialogTitle className="text-destructive">Supprimer le build</DialogTitle>
             <DialogDescription>
-              Êtes-vous sûr de vouloir supprimer ce build pour <strong>"{buildToDelete ? projects[buildToDelete.project_id]?.name || 'Unknown Project' : ''}"</strong> ? 
+              Êtes-vous sûr de vouloir supprimer ce build pour <strong>"{buildToDelete ? projects[buildToDelete.project_id]?.name || `Build ${buildToDelete.id.substring(0, 8)}` : ''}"</strong> ? 
               <br />
               Cette action est <strong>irréversible</strong>.
               {buildToDelete?.status === 'completed' && (
@@ -314,7 +362,7 @@ export default function BuildsPage() {
                     </div>
                     <div>
                       <p className="font-medium">
-                        {projects[build.project_id]?.name || 'Unknown Project'}
+                        {projects[build.project_id]?.name || `Build ${build.id.substring(0, 8)}`}
                       </p>
                       <p className="text-sm text-muted-foreground">
                         {build.platform.charAt(0).toUpperCase() + build.platform.slice(1)} Build
@@ -368,26 +416,20 @@ export default function BuildsPage() {
                                     ? 'hover:bg-success/10 hover:border-success/30' 
                                     : 'hover:bg-info/10 hover:border-info/30'
                                 }`}
-                                onClick={async () => {
-                                  try {
-                                    const blob = await buildsApi.download(build.id)
-                                    const url = window.URL.createObjectURL(blob)
-                                    const a = document.createElement('a')
-                                    a.href = url
-                                    a.download = `app-${build.platform}-${Date.now()}.${build.platform === 'android' ? 'apk' : 'ipa'}`
-                                    document.body.appendChild(a)
-                                    a.click()
-                                    window.URL.revokeObjectURL(url)
-                                    document.body.removeChild(a)
-                                    toast.success('Téléchargement démarré !')
-                                  } catch (error: any) {
-                                    logger.error('Erreur de téléchargement', error, { buildId: build.id, platform: build.platform })
-                                    toast.error(error.response?.data?.detail || 'Erreur lors du téléchargement')
-                                  }
-                                }}
+                                onClick={() => download(build.id)}
+                                disabled={isDownloading}
                               >
-                                <Download className="w-4 h-4 mr-1" />
-                                {build.platform === 'android' ? 'Télécharger APK' : 'Télécharger IPA'}
+                                {isDownloading ? (
+                                  <>
+                                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                                    Téléchargement... {progress.toFixed(0)}%
+                                  </>
+                                ) : (
+                                  <>
+                                    <Download className="w-4 h-4 mr-1" />
+                                    {build.platform === 'android' ? 'Télécharger APK' : 'Télécharger IPA'}
+                                  </>
+                                )}
                               </Button>
                             </TooltipTrigger>
                             <TooltipContent>
