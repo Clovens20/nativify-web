@@ -11,6 +11,14 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import logging
+try:
+    from features_config import get_android_permissions, get_android_dependencies
+except ImportError:
+    # Fallback si import relatif ne fonctionne pas
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent))
+    from features_config import get_android_permissions, get_android_dependencies
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +255,21 @@ if %ERRORLEVEL% equ 0 (
             sdk_js = self._generate_javascript_sdk(web_url, features, "android")
             zip_file.writestr(f"{base_dir}/app/src/main/assets/nativiweb-sdk.js", sdk_js)
             
+            # 13.1. Service Worker pour offline support (si activé)
+            if any(f.get("id") == "offline_bundling" and f.get("enabled") for f in features):
+                try:
+                    from service_worker_generator import generate_service_worker
+                    service_worker = generate_service_worker(web_url, features)
+                    zip_file.writestr(f"{base_dir}/app/src/main/assets/service-worker.js", service_worker)
+                except ImportError:
+                    # Fallback si import ne fonctionne pas
+                    import sys
+                    from pathlib import Path
+                    sys.path.insert(0, str(Path(__file__).parent))
+                    from service_worker_generator import generate_service_worker
+                    service_worker = generate_service_worker(web_url, features)
+                    zip_file.writestr(f"{base_dir}/app/src/main/assets/service-worker.js", service_worker)
+            
             # 14. README.md avec instructions
             readme = self._generate_android_readme(project_name, package_name, web_url)
             zip_file.writestr(f"{base_dir}/README.md", readme)
@@ -268,30 +291,22 @@ if %ERRORLEVEL% equ 0 (
         return zip_buffer.read()
 # CONTINUATION DE LA CLASSE NativeTemplateGenerator
     
-    def _generate_android_manifest(self, package_name: str, app_name: str, features: List[Dict[str, Any]]) -> str:
+    def _generate_android_manifest(self, package_name: str, app_name: str, features: List[Dict[str, Any]], orientation: str = "sensor") -> str:
         """Génère AndroidManifest.xml avec permissions selon les fonctionnalités"""
-        permissions = []
-        permissions_map = {
-            "camera": ["android.permission.CAMERA"],
-            "geolocation": ["android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION"],
-            "push_notifications": ["android.permission.POST_NOTIFICATIONS"],
-            "contacts": ["android.permission.READ_CONTACTS"],
-            "file_system": ["android.permission.READ_EXTERNAL_STORAGE", "android.permission.WRITE_EXTERNAL_STORAGE"],
-        }
+        # Récupérer les features activées
+        enabled_features = [f.get("id") for f in features if f.get("enabled")]
         
-        for feature in features:
-            if feature.get("enabled") and feature.get("id") in permissions_map:
-                permissions.extend(permissions_map[feature["id"]])
+        # Utiliser features_config pour récupérer les permissions
+        permissions = get_android_permissions(enabled_features)
         
-        permissions_xml = "\n".join([f'    <uses-permission android:name="{p}" />' for p in set(permissions)])
+        # Toujours ajouter INTERNET
+        if 'android.permission.INTERNET' not in permissions:
+            permissions.insert(0, 'android.permission.INTERNET')
         
-        # Permissions Internet toujours nécessaires
-        if 'android.permission.INTERNET' not in permissions_xml:
-            permissions_xml = '    <uses-permission android:name="android.permission.INTERNET" />\n' + permissions_xml
+        permissions_xml = "\n".join([f'    <uses-permission android:name="{p}" />' for p in permissions])
         
         return f"""<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="{package_name}">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
 {permissions_xml}
 
@@ -307,6 +322,7 @@ if %ERRORLEVEL% equ 0 (
             android:name=".MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
+            android:screenOrientation="{orientation}"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -347,6 +363,17 @@ task clean(type: Delete) {
     
     def _generate_app_build_gradle(self, package_name: str, features: List[Dict[str, Any]]) -> str:
         """Génère build.gradle au niveau app - VERSION CORRIGÉE"""
+        # Récupérer les features activées
+        enabled_features = [f.get("id") for f in features if f.get("enabled")]
+        
+        # Récupérer les dépendances depuis features_config
+        feature_deps = get_android_dependencies(enabled_features)
+        
+        # Construire la liste des dépendances
+        feature_dependencies_str = ""
+        if feature_deps:
+            feature_dependencies_str = "\n".join([f"    implementation '{dep}'" for dep in feature_deps])
+        
         return f"""plugins {{
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
@@ -398,6 +425,9 @@ dependencies {{
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     implementation 'androidx.webkit:webkit:1.9.0'
     implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
+    
+    // Feature-specific dependencies
+{feature_dependencies_str}
     
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
@@ -548,11 +578,11 @@ class MainActivity : AppCompatActivity() {{
 """
     
     def _generate_native_bridge(self, package_name: str, features: List[Dict[str, Any]]) -> str:
-        """Génère NativiWebBridge.kt pour communication native - VERSION CORRIGÉE"""
+        """Génère NativiWebBridge.kt pour communication native - VERSION ÉTENDUE"""
+        enabled_features = [f.get("id") for f in features if f.get("enabled")]
         
-        return f"""package {package_name}
-
-import android.Manifest
+        # Imports de base
+        imports = """import android.Manifest
 import android.content.Context
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -564,9 +594,57 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
+import org.json.JSONArray"""
+        
+        # Imports conditionnels pour les nouvelles features
+        if 'in_app_purchases' in enabled_features:
+            imports += """
+import com.android.billingclient.api.*
+import android.app.Activity"""
+        
+        if 'qr_scanner' in enabled_features:
+            imports += """
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.BarcodeScannerOptions
+import androidx.camera.core.*
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors"""
+        
+        if 'audio_recording' in enabled_features or 'video_recording' in enabled_features:
+            imports += """
+import android.media.MediaRecorder
+import android.media.MediaPlayer
+import java.io.File
+import java.io.IOException"""
+        
+        # Code du bridge de base
+        bridge_code = f"""package {package_name}
+
+{imports}
 
 class NativiWebBridge(private val context: Context, private val webView: WebView) {{
-    private val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+    private val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator"""
+        
+        # Ajouter les propriétés pour les nouvelles features
+        if 'in_app_purchases' in enabled_features:
+            bridge_code += """
+    private var billingClient: BillingClient? = null"""
+        
+        if 'qr_scanner' in enabled_features:
+            bridge_code += """
+    private var cameraExecutor: ExecutorService? = null
+    private var imageCapture: ImageCapture? = null"""
+        
+        if 'audio_recording' in enabled_features or 'video_recording' in enabled_features:
+            bridge_code += """
+    private var mediaRecorder: MediaRecorder? = null
+    private var recordingFile: File? = null"""
+        
+        # Méthodes de base
+        bridge_code += """
 
     @JavascriptInterface
     fun getPlatform(): String {{
@@ -629,7 +707,297 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
         android.os.Handler(android.os.Looper.getMainLooper()).post {{
             android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
         }}
+    }}"""
+        
+        # Ajouter les méthodes pour In-App Purchases
+        if 'in_app_purchases' in enabled_features:
+            bridge_code += """
+
+    // ========== IN-APP PURCHASES ==========
+    @JavascriptInterface
+    fun initializeBilling(callback: String) {{
+        billingClient = BillingClient.newBuilder(context)
+            .setListener {{ billingResult, purchases ->
+                if (billingResult.responseCode == BillingClient.BillingResponseCode.OK && purchases != null) {{
+                    for (purchase in purchases) {{
+                        handlePurchase(purchase, callback)
+                    }}
+                }}
+            }}
+            .enablePendingPurchases()
+            .build()
+        
+        billingClient?.startConnection(object : BillingClientStateListener {{
+            override fun onBillingSetupFinished(billingResult: BillingResult) {{
+                val result = JSONObject().apply {{
+                    put("success", billingResult.responseCode == BillingClient.BillingResponseCode.OK)
+                    put("message", billingResult.debugMessage)
+                }}
+                webView.post {{
+                    webView.evaluateJavascript("$callback($result)", null)
+                }}
+            }}
+            override fun onBillingServiceDisconnected() {{
+                val result = JSONObject().apply {{
+                    put("success", false)
+                    put("message", "Billing service disconnected")
+                }}
+                webView.post {{
+                    webView.evaluateJavascript("$callback($result)", null)
+                }}
+            }}
+        }})
     }}
+    
+    @JavascriptInterface
+    fun purchaseProduct(productId: String, productType: String, callback: String) {{
+        if (billingClient == null) {{
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", "Billing not initialized")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+            return
+        }}
+        
+        val productList = listOf(
+            QueryProductDetailsParams.Product.newBuilder()
+                .setProductId(productId)
+                .setProductType(
+                    if (productType == "subscription") 
+                        BillingClient.ProductType.SUBS 
+                    else 
+                        BillingClient.ProductType.INAPP
+                )
+                .build()
+        )
+        
+        val params = QueryProductDetailsParams.newBuilder()
+            .setProductList(productList)
+            .build()
+        
+        billingClient?.queryProductDetailsAsync(params) {{ billingResult, productDetailsList ->
+            if (billingResult.responseCode == BillingClient.BillingResponseCode.OK && productDetailsList.isNotEmpty()) {{
+                val productDetails = productDetailsList[0]
+                val flowParams = BillingFlowParams.newBuilder()
+                    .setProductDetailsParamsList(
+                        listOf(
+                            BillingFlowParams.ProductDetailsParams.newBuilder()
+                                .setProductDetails(productDetails)
+                                .build()
+                        )
+                    )
+                    .build()
+                
+                val responseCode = billingClient?.launchBillingFlow(
+                    context as? Activity,
+                    flowParams
+                )?.responseCode
+                
+                val result = JSONObject().apply {{
+                    put("success", responseCode == BillingClient.BillingResponseCode.OK)
+                }}
+                webView.post {{
+                    webView.evaluateJavascript("$callback($result)", null)
+                }}
+            }} else {{
+                val result = JSONObject().apply {{
+                    put("success", false)
+                    put("error", "Product not found")
+                }}
+                webView.post {{
+                    webView.evaluateJavascript("$callback($result)", null)
+                }}
+            }}
+        }}
+    }}
+    
+    @JavascriptInterface
+    fun getAvailableProducts(productType: String, callback: String) {{
+        // Note: Les product IDs doivent être configurés dans Google Play Console
+        // Cette méthode doit être personnalisée selon vos produits
+        val result = JSONArray()
+        webView.post {{
+            webView.evaluateJavascript("$callback($result)", null)
+        }}
+    }}
+    
+    private fun handlePurchase(purchase: Purchase, callback: String) {{
+        if (purchase.purchaseState == Purchase.PurchaseState.PURCHASED) {{
+            if (!purchase.isAcknowledged) {{
+                val acknowledgeParams = AcknowledgePurchaseParams.newBuilder()
+                    .setPurchaseToken(purchase.purchaseToken)
+                    .build()
+                
+                billingClient?.acknowledgePurchase(acknowledgeParams) {{ billingResult ->
+                    val result = JSONObject().apply {{
+                        put("success", billingResult.responseCode == BillingClient.BillingResponseCode.OK)
+                        put("productId", purchase.products[0])
+                        put("purchaseToken", purchase.purchaseToken)
+                    }}
+                    webView.post {{
+                        webView.evaluateJavascript("$callback($result)", null)
+                    }}
+                }}
+            }}
+        }}
+    }}"""
+        
+        # Ajouter les méthodes pour QR Scanner
+        if 'qr_scanner' in enabled_features:
+            bridge_code += """
+
+    // ========== QR/BARCODE SCANNER ==========
+    @JavascriptInterface
+    fun scanQRCode(callback: String) {{
+        // Note: Cette méthode nécessite une Activity avec CameraX
+        // L'implémentation complète nécessite une Activity dédiée pour le scanner
+        val result = JSONObject().apply {{
+            put("success", false)
+            put("error", "QR Scanner requires dedicated activity. Use camera feature for basic scanning.")
+        }}
+        webView.post {{
+            webView.evaluateJavascript("$callback($result)", null)
+        }}
+    }}"""
+        
+        # Ajouter les méthodes pour Audio/Video Recording
+        if 'audio_recording' in enabled_features:
+            bridge_code += """
+
+    // ========== AUDIO RECORDING ==========
+    @JavascriptInterface
+    fun startAudioRecording(callback: String) {{
+        try {{
+            val outputFile = File(context.getExternalFilesDir(null), "recording_${{System.currentTimeMillis()}}.m4a")
+            recordingFile = outputFile
+            
+            mediaRecorder = MediaRecorder().apply {{
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setOutputFile(outputFile.absolutePath)
+                prepare()
+                start()
+            }}
+            
+            val result = JSONObject().apply {{
+                put("success", true)
+                put("filePath", outputFile.absolutePath)
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }} catch (e: Exception) {{
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", e.message)
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }}
+    }}
+    
+    @JavascriptInterface
+    fun stopAudioRecording(callback: String) {{
+        try {{
+            mediaRecorder?.apply {{
+                stop()
+                release()
+            }}
+            mediaRecorder = null
+            
+            val result = JSONObject().apply {{
+                put("success", true)
+                put("filePath", recordingFile?.absolutePath ?: "")
+            }}
+            recordingFile = null
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }} catch (e: Exception) {{
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", e.message)
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }}
+    }}"""
+        
+        if 'video_recording' in enabled_features:
+            bridge_code += """
+
+    // ========== VIDEO RECORDING ==========
+    @JavascriptInterface
+    fun startVideoRecording(callback: String) {{
+        try {{
+            val outputFile = File(context.getExternalFilesDir(null), "video_${{System.currentTimeMillis()}}.mp4")
+            recordingFile = outputFile
+            
+            mediaRecorder = MediaRecorder().apply {{
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setVideoSource(MediaRecorder.VideoSource.SURFACE)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+                setOutputFile(outputFile.absolutePath)
+                prepare()
+                start()
+            }}
+            
+            val result = JSONObject().apply {{
+                put("success", true)
+                put("filePath", outputFile.absolutePath)
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }} catch (e: Exception) {{
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", e.message)
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }}
+    }}
+    
+    @JavascriptInterface
+    fun stopVideoRecording(callback: String) {{
+        try {{
+            mediaRecorder?.apply {{
+                stop()
+                release()
+            }}
+            mediaRecorder = null
+            
+            val result = JSONObject().apply {{
+                put("success", true)
+                put("filePath", recordingFile?.absolutePath ?: "")
+            }}
+            recordingFile = null
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }} catch (e: Exception) {{
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", e.message)
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }}
+    }}"""
+        
+        # Méthodes utilitaires
+        bridge_code += """
     
     private fun callbackSuccess(action: String, message: String) {{
         val js = "if(window.NativiWeb && window.NativiWeb._handleNativeCallback) {{" +
@@ -648,8 +1016,9 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
             webView.evaluateJavascript(js, null)
         }}
     }}
-}}
-"""
+}}"""
+        
+        return bridge_code
 
     # CONTINUATION: Méthodes iOS et utilitaires (à copier après les méthodes Android)
     
@@ -674,57 +1043,268 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
         return zip_buffer.read()
     
     def _generate_javascript_sdk(self, web_url: str, features: List[Dict[str, Any]], platform: str) -> str:
-        """Génère le SDK JavaScript personnalisé"""
+        """Génère le SDK JavaScript personnalisé avec toutes les nouvelles features"""
         enabled_features = [f.get("id") for f in features if f.get("enabled")]
         
+        # Générer le code pour chaque feature
+        sdk_methods = """
+        isNative: function() {
+            return typeof window.NativiWebNative !== 'undefined';
+        },
+        
+        vibrate: function(duration) {
+            if (this.isNative() && window.NativiWebNative.vibrate) {
+                window.NativiWebNative.vibrate(duration || 100);
+                return Promise.resolve();
+            }
+            return Promise.reject('Not native');
+        },
+        
+        copyToClipboard: function(text) {
+            if (this.isNative() && window.NativiWebNative.copyToClipboard) {
+                window.NativiWebNative.copyToClipboard(text);
+                return Promise.resolve();
+            }
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                return navigator.clipboard.writeText(text);
+            }
+            return Promise.reject('Clipboard not available');
+        },
+        
+        getDeviceInfo: function() {
+            if (this.isNative() && window.NativiWebNative.getDeviceInfo) {
+                return Promise.resolve(JSON.parse(window.NativiWebNative.getDeviceInfo()));
+            }
+            return Promise.resolve({ platform: 'web', userAgent: navigator.userAgent });
+        },
+        
+        showToast: function(message) {
+            if (this.isNative() && window.NativiWebNative.showToast) {
+                window.NativiWebNative.showToast(message);
+                return Promise.resolve();
+            }
+            console.log('Toast:', message);
+            return Promise.resolve();
+        },"""
+        
+        # Ajouter In-App Purchases si activé
+        if 'in_app_purchases' in enabled_features:
+            sdk_methods += """
+        
+        // In-App Purchases
+        initializeBilling: function() {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    reject(new Error('In-app purchases only available in native app'));
+                    return;
+                }
+                const callback = 'billing_init_' + Date.now();
+                window[callback] = (result) => {
+                    delete window[callback];
+                    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                    if (parsed.success) {
+                        resolve(parsed);
+                    } else {
+                        reject(new Error(parsed.message || 'Billing initialization failed'));
+                    }
+                };
+                window.NativiWebNative.initializeBilling(callback);
+            });
+        },
+        
+        purchaseProduct: function(productId, productType = 'inapp') {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    reject(new Error('In-app purchases only available in native app'));
+                    return;
+                }
+                const callback = 'purchase_' + Date.now();
+                window[callback] = (result) => {
+                    delete window[callback];
+                    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                    if (parsed.success) {
+                        resolve(parsed);
+                    } else {
+                        reject(new Error(parsed.error || 'Purchase failed'));
+                    }
+                };
+                window.NativiWebNative.purchaseProduct(productId, productType, callback);
+            });
+        },
+        
+        getAvailableProducts: function(productType = 'inapp') {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    reject(new Error('In-app purchases only available in native app'));
+                    return;
+                }
+                const callback = 'products_' + Date.now();
+                window[callback] = (products) => {
+                    delete window[callback];
+                    const parsed = typeof products === 'string' ? JSON.parse(products) : products;
+                    resolve(parsed);
+                };
+                window.NativiWebNative.getAvailableProducts(productType, callback);
+            });
+        },"""
+        
+        # Ajouter QR Scanner si activé
+        if 'qr_scanner' in enabled_features:
+            sdk_methods += """
+        
+        // QR/Barcode Scanner
+        scanQRCode: function() {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    reject(new Error('QR Scanner only available in native app'));
+                    return;
+                }
+                const callback = 'qr_scan_' + Date.now();
+                window[callback] = (result) => {
+                    delete window[callback];
+                    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                    if (parsed.success) {
+                        resolve(parsed);
+                    } else {
+                        reject(new Error(parsed.error || 'QR scan failed'));
+                    }
+                };
+                window.NativiWebNative.scanQRCode(callback);
+            });
+        },"""
+        
+        # Ajouter Audio Recording si activé
+        if 'audio_recording' in enabled_features:
+            sdk_methods += """
+        
+        // Audio Recording
+        startAudioRecording: function() {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    reject(new Error('Audio recording only available in native app'));
+                    return;
+                }
+                const callback = 'audio_start_' + Date.now();
+                window[callback] = (result) => {
+                    delete window[callback];
+                    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                    if (parsed.success) {
+                        resolve(parsed);
+                    } else {
+                        reject(new Error(parsed.error || 'Audio recording start failed'));
+                    }
+                };
+                window.NativiWebNative.startAudioRecording(callback);
+            });
+        },
+        
+        stopAudioRecording: function() {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    reject(new Error('Audio recording only available in native app'));
+                    return;
+                }
+                const callback = 'audio_stop_' + Date.now();
+                window[callback] = (result) => {
+                    delete window[callback];
+                    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                    if (parsed.success) {
+                        resolve(parsed);
+                    } else {
+                        reject(new Error(parsed.error || 'Audio recording stop failed'));
+                    }
+                };
+                window.NativiWebNative.stopAudioRecording(callback);
+            });
+        },"""
+        
+        # Ajouter Video Recording si activé
+        if 'video_recording' in enabled_features:
+            sdk_methods += """
+        
+        // Video Recording
+        startVideoRecording: function() {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    reject(new Error('Video recording only available in native app'));
+                    return;
+                }
+                const callback = 'video_start_' + Date.now();
+                window[callback] = (result) => {
+                    delete window[callback];
+                    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                    if (parsed.success) {
+                        resolve(parsed);
+                    } else {
+                        reject(new Error(parsed.error || 'Video recording start failed'));
+                    }
+                };
+                window.NativiWebNative.startVideoRecording(callback);
+            });
+        },
+        
+        stopVideoRecording: function() {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    reject(new Error('Video recording only available in native app'));
+                    return;
+                }
+                const callback = 'video_stop_' + Date.now();
+                window[callback] = (result) => {
+                    delete window[callback];
+                    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                    if (parsed.success) {
+                        resolve(parsed);
+                    } else {
+                        reject(new Error(parsed.error || 'Video recording stop failed'));
+                    }
+                };
+                window.NativiWebNative.stopVideoRecording(callback);
+            });
+        },"""
+        
+        # Ajouter Offline Detection
+        sdk_methods += """
+        
+        // Offline/Online Detection
+        isOnline: function() {
+            if (typeof navigator !== 'undefined' && 'onLine' in navigator) {
+                return Promise.resolve(navigator.onLine);
+            }
+            return Promise.resolve(true); // Assume online if can't detect
+        },
+        
+        onOnline: function(callback) {
+            if (typeof window !== 'undefined') {
+                window.addEventListener('online', callback);
+            }
+        },
+        
+        onOffline: function(callback) {
+            if (typeof window !== 'undefined') {
+                window.addEventListener('offline', callback);
+            }
+        },"""
+        
         return f"""// NativiWeb SDK v1.0.0
+// Generated for platform: {platform}
+// Enabled features: {', '.join(enabled_features)}
 (function() {{
     'use strict';
     
     const NativiWeb = {{
         platform: '{platform}',
         version: '1.0.0',
-        features: {json.dumps(enabled_features)},
+        features: {json.dumps(enabled_features)},{sdk_methods}
         
-        isNative: function() {{
-            return typeof window.NativiWebNative !== 'undefined';
-        }},
-        
-        vibrate: function(duration) {{
-            if (this.isNative() && window.NativiWebNative.vibrate) {{
-                window.NativiWebNative.vibrate(duration || 100);
-                return Promise.resolve();
-            }}
-            return Promise.reject('Not native');
-        }},
-        
-        copyToClipboard: function(text) {{
-            if (this.isNative() && window.NativiWebNative.copyToClipboard) {{
-                window.NativiWebNative.copyToClipboard(text);
-                return Promise.resolve();
-            }}
-            return navigator.clipboard.writeText(text);
-        }},
-        
-        getDeviceInfo: function() {{
-            if (this.isNative() && window.NativiWebNative.getDeviceInfo) {{
-                return Promise.resolve(JSON.parse(window.NativiWebNative.getDeviceInfo()));
-            }}
-            return Promise.resolve({{ platform: 'web', userAgent: navigator.userAgent }});
-        }},
-        
-        showToast: function(message) {{
-            if (this.isNative() && window.NativiWebNative.showToast) {{
-                window.NativiWebNative.showToast(message);
-                return Promise.resolve();
-            }}
-            console.log('Toast:', message);
-            return Promise.resolve();
+        _handleNativeCallback: function(action, success, message) {{
+            // Internal callback handler
+            console.log('Native callback:', action, success, message);
         }}
     }};
     
     window.NativiWeb = NativiWeb;
-    console.log('NativiWeb SDK initialized on', NativiWeb.platform);
+    console.log('NativiWeb SDK initialized on', NativiWeb.platform, 'with features:', NativiWeb.features);
 }})();
 """
     
