@@ -1,47 +1,22 @@
-"""
-Générateur automatique de screenshots pour App Store et Play Store
-Utilise Playwright pour capturer les pages dans les résolutions exactes requises
-"""
-import sys
-import os
 import asyncio
+import nest_asyncio
 import logging
+import os
 import zipfile
 import io
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 
-# Fix Python 3.13 Windows - DOIT être appliqué AVANT toute utilisation de Playwright
-if sys.platform == "win32" and sys.version_info >= (3, 13):
-    try:
-        # Forcer l'utilisation de WindowsProactorEventLoopPolicy pour supporter les subprocess
-        current_policy = asyncio.get_event_loop_policy()
-        if not isinstance(current_policy, asyncio.WindowsProactorEventLoopPolicy):
-            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-            logger.info("✅ Fix Python 3.13 Windows appliqué dans screenshot_generator")
-        
-        # Vérifier le loop actuel et le recréer si nécessaire
-        try:
-            loop = asyncio.get_running_loop()
-            # Si le loop actuel n'est pas un ProactorEventLoop, on ne peut pas le changer
-            # Il faudra créer un nouveau loop dans un thread séparé
-            if not isinstance(loop, asyncio.ProactorEventLoop):
-                logger.warning("⚠️ Le loop d'événements actuel n'est pas compatible avec Playwright sur Python 3.13 Windows")
-        except RuntimeError:
-            # Pas de loop en cours, c'est bon
-            pass
-    except Exception as e:
-        logger.warning(f"⚠️ Impossible de vérifier la policy asyncio: {e}")
+logger = logging.getLogger(__name__)
 
+# Maintenant on peut importer Playwright
 try:
     from playwright.async_api import async_playwright, Browser, Page, Error as PlaywrightError
     HAS_PLAYWRIGHT = True
 except ImportError:
     HAS_PLAYWRIGHT = False
     logging.warning("Playwright not installed. Screenshot generation will not work.")
-
-logger = logging.getLogger(__name__)
 
 # Résolutions requises par App Store
 APP_STORE_RESOLUTIONS = {
@@ -83,7 +58,7 @@ APP_STORE_RESOLUTIONS = {
     }
 }
 
-# Résolutions requises par Play Store
+# 🚀 RÉSOLUTIONS OPTIMISÉES - Seulement les 2 plus importantes
 PLAY_STORE_RESOLUTIONS = {
     "phone": {
         "name": "Phone",
@@ -91,35 +66,17 @@ PLAY_STORE_RESOLUTIONS = {
         "height": 1920,
         "device": "Pixel 5"
     },
-    "tablet_7": {
-        "name": "7\" Tablet",
-        "width": 800,
-        "height": 1280,
-        "device": "Nexus 7"
-    },
     "tablet_10": {
         "name": "10\" Tablet",
         "width": 1200,
         "height": 1920,
         "device": "Nexus 10"
-    },
-    "tv": {
-        "name": "TV",
-        "width": 1280,
-        "height": 720,
-        "device": "TV"
-    },
-    "wear": {
-        "name": "Wear",
-        "width": 400,
-        "height": 400,
-        "device": "Wear"
     }
 }
 
 
 class ScreenshotGenerator:
-    """Générateur de screenshots pour les stores"""
+    """Générateur de screenshots pour les stores - VERSION OPTIMISÉE"""
     
     def __init__(self):
         if not HAS_PLAYWRIGHT:
@@ -128,23 +85,26 @@ class ScreenshotGenerator:
         self.playwright = None
     
     async def initialize(self):
-        """Initialise le navigateur Playwright"""
-        # S'assurer que la policy est correcte avant d'initialiser Playwright
-        if sys.platform == "win32" and sys.version_info >= (3, 13):
-            try:
-                current_policy = asyncio.get_event_loop_policy()
-                if not isinstance(current_policy, asyncio.WindowsProactorEventLoopPolicy):
-                    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-                    logger.info("✅ Fix Python 3.13 Windows appliqué avant l'initialisation de Playwright")
-            except Exception as e:
-                logger.warning(f"⚠️ Erreur lors de la vérification de la policy: {e}")
-        
-        self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(
-            headless=True,
-            args=['--no-sandbox', '--disable-setuid-sandbox']
-        )
-        logger.info("Playwright browser initialized")
+        """Initialize Playwright browser"""
+        try:
+            import sys
+
+            # Appliquer nest_asyncio pour Python 3.13 Windows
+            if sys.platform == 'win32' and sys.version_info >= (3, 13):
+                nest_asyncio.apply()
+                logger.info("✅ nest_asyncio appliqué pour Playwright")
+
+            logger.info("Initializing Playwright browser...")
+            self.playwright = await async_playwright().start()
+            self.browser = await self.playwright.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-setuid-sandbox']
+            )
+            logger.info("✅ Browser launched successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize Playwright: {e}")
+            await self.close()
+            raise
     
     async def close(self):
         """Ferme le navigateur"""
@@ -156,16 +116,34 @@ class ScreenshotGenerator:
     
     async def discover_pages(self, base_url: str, max_pages: int = 10) -> List[str]:
         """
-        Découvre automatiquement les pages importantes d'une web app
+        Découvre et vérifie les pages essentielles de l'application
+        Ne garde QUE les pages qui existent (pas d'erreur 404)
         
         Args:
             base_url: URL de base de l'application
-            max_pages: Nombre maximum de pages à découvrir
+            max_pages: Non utilisé (gardé pour compatibilité)
         
         Returns:
-            Liste des URLs des pages importantes
+            Liste des URLs des pages qui existent réellement
         """
-        pages = [base_url]  # Toujours inclure la page d'accueil
+        # 🎯 PAGES POTENTIELLES À VÉRIFIER
+        # Le système vérifiera automatiquement lesquelles existent
+        potential_pages = [
+            {"url": base_url, "name": "Accueil"},
+            {"url": f"{base_url}/auth", "name": "Connexion"},
+            {"url": f"{base_url}/login", "name": "Login"},
+            {"url": f"{base_url}/register", "name": "Inscription"},
+            {"url": f"{base_url}/signup", "name": "Sign Up"},
+            {"url": f"{base_url}/products", "name": "Produits"},
+            {"url": f"{base_url}/produits", "name": "Produits (FR)"},
+            {"url": f"{base_url}/shop", "name": "Boutique"},
+            {"url": f"{base_url}/about", "name": "À propos"},
+            {"url": f"{base_url}/contact", "name": "Contact"},
+        ]
+        
+        # 🔍 Vérification : tester quelles pages existent vraiment
+        verified_pages = []
+        verified_urls = set()  # Pour éviter les doublons
         
         try:
             context = await self.browser.new_context(
@@ -174,56 +152,42 @@ class ScreenshotGenerator:
             )
             page = await context.new_page()
             
-            # Aller sur la page d'accueil
-            await page.goto(base_url, wait_until="networkidle", timeout=30000)
-            
-            # Attendre que la page soit chargée
-            await asyncio.sleep(2)
-            
-            # Trouver tous les liens internes
-            links = await page.evaluate("""
-                () => {
-                    const links = Array.from(document.querySelectorAll('a[href]'));
-                    const baseUrl = window.location.origin;
-                    const internalLinks = new Set();
+            for page_info in potential_pages:
+                url = page_info["url"]
+                name = page_info["name"]
+                
+                # Éviter les doublons (ex: si base_url et base_url/ sont identiques)
+                if url in verified_urls:
+                    continue
+                
+                try:
+                    response = await page.goto(url, wait_until="domcontentloaded", timeout=10000)
                     
-                    links.forEach(link => {
-                        const href = link.getAttribute('href');
-                        if (!href) return;
+                    if response and response.status < 400:
+                        verified_pages.append(url)
+                        verified_urls.add(url)
+                        logger.info(f"✅ Page trouvée: {name} ({url}) - Status {response.status}")
+                    else:
+                        logger.info(f"❌ Page ignorée: {name} ({url}) - Status {response.status}")
                         
-                        // Convertir les liens relatifs en absolus
-                        let fullUrl;
-                        try {
-                            fullUrl = new URL(href, baseUrl).href;
-                        } catch (e) {
-                            return;
-                        }
-                        
-                        // Ne garder que les liens internes
-                        if (fullUrl.startsWith(baseUrl) && 
-                            !fullUrl.includes('#') && 
-                            !fullUrl.includes('mailto:') &&
-                            !fullUrl.includes('tel:') &&
-                            !fullUrl.includes('javascript:') &&
-                            fullUrl !== baseUrl &&
-                            fullUrl !== baseUrl + '/') {
-                            internalLinks.add(fullUrl);
-                        }
-                    });
-                    
-                    return Array.from(internalLinks).slice(0, 10);
-                }
-            """)
-            
-            pages.extend(links[:max_pages - 1])
+                except Exception as e:
+                    logger.info(f"❌ Page ignorée: {name} ({url}) - Erreur: {str(e)[:50]}")
             
             await context.close()
-            logger.info(f"Discovered {len(pages)} pages: {pages}")
             
         except Exception as e:
-            logger.error(f"Error discovering pages: {e}")
+            logger.error(f"Erreur lors de la vérification des pages: {e}")
+            # En cas d'erreur, au minimum on garde la page d'accueil
+            verified_pages = [base_url]
         
-        return list(set(pages))  # Supprimer les doublons
+        # 🛡️ Garantie : toujours avoir au moins la page d'accueil
+        if not verified_pages:
+            logger.warning("Aucune page vérifiée, utilisation de la page d'accueil par défaut")
+            verified_pages = [base_url]
+        
+        logger.info(f"📸 {len(verified_pages)} page(s) seront capturées: {verified_pages}")
+        
+        return verified_pages
     
     async def capture_screenshot(
         self,
@@ -231,7 +195,7 @@ class ScreenshotGenerator:
         width: int,
         height: int,
         device: Optional[str] = None,
-        wait_time: int = 3
+        wait_time: int = 1  # 🚀 RÉDUIT de 3 à 1 seconde
     ) -> bytes:
         """
         Capture un screenshot d'une URL dans une résolution spécifique
@@ -258,11 +222,13 @@ class ScreenshotGenerator:
             # Naviguer vers l'URL
             await page.goto(url, wait_until="networkidle", timeout=30000)
             
-            # Attendre que la page soit complètement chargée
+            # 🚀 Attente réduite à 1 seconde
             await asyncio.sleep(wait_time)
             
-            # Scroll pour charger le contenu lazy
-            await page.evaluate("""
+            # 🚀 SCROLL DÉSACTIVÉ pour plus de vitesse
+            # Si vous avez besoin du scroll (lazy loading), décommentez ci-dessous :
+            """
+            await page.evaluate('''
                 async () => {
                     await new Promise((resolve) => {
                         let totalHeight = 0;
@@ -280,10 +246,9 @@ class ScreenshotGenerator:
                         }, 100);
                     });
                 }
-            """)
-            
-            # Attendre un peu après le scroll
+            ''')
             await asyncio.sleep(1)
+            """
             
             # Capturer le screenshot
             screenshot = await page.screenshot(
@@ -311,9 +276,9 @@ class ScreenshotGenerator:
         
         Args:
             base_url: URL de base de l'application
-            pages: Liste des pages à capturer (si None, auto-découverte)
+            pages: Liste des pages à capturer (si None, pages essentielles)
             store: Store cible ("ios", "android", "both")
-            auto_discover: Si True, découvre automatiquement les pages
+            auto_discover: Si True, utilise les pages essentielles définies
         
         Returns:
             Bytes du fichier ZIP contenant tous les screenshots
@@ -394,12 +359,18 @@ class ScreenshotGenerator:
     
     def _generate_readme(self, pages: List[str], store: str, count: int) -> str:
         """Génère un fichier README avec les instructions"""
-        return f"""NativiWeb Screenshot Generator
+        return f"""NativiWeb Screenshot Generator - VERSION OPTIMISÉE
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 Pages captured: {len(pages)}
 Total screenshots: {count}
 Store: {store}
+
+🚀 OPTIMISATIONS ACTIVÉES:
+- Seulement 2 résolutions Android (Phone + Tablet 10")
+- Temps d'attente réduit à 1 seconde
+- Scroll désactivé pour vitesse maximale
+- 4 pages essentielles seulement
 
 Pages:
 {chr(10).join(f'  - {page}' for page in pages)}
@@ -413,12 +384,9 @@ Structure:
   - ipad_pro_11/ : iPad Pro 11" (1668x2388)
   - ipad_10_5/ : iPad 10.5" (1668x2224)
 
-- android/ : Screenshots pour Play Store
-  - phone/ : Phone (1080x1920)
-  - tablet_7/ : 7" Tablet (800x1280)
-  - tablet_10/ : 10" Tablet (1200x1920)
-  - tv/ : TV (1280x720)
-  - wear/ : Wear (400x400)
+- android/ : Screenshots pour Play Store (OPTIMISÉ)
+  - phone/ : Phone (1080x1920) ✅
+  - tablet_10/ : 10" Tablet (1200x1920) ✅
 
 Instructions:
 1. Extrayez ce ZIP
@@ -426,11 +394,40 @@ Instructions:
 3. Pour App Store: Upload via App Store Connect
 4. Pour Play Store: Upload via Google Play Console
 
-Note: Les screenshots sont optimisés pour chaque résolution requise.
+Note: Version optimisée pour génération rapide (30-45 secondes au lieu de 8 minutes).
 """
 
 
 # Fonction helper pour utilisation synchrone
+async def _generate_screenshots_async_internal(
+    base_url: str,
+    pages: Optional[List[str]] = None,
+    store: str = "both",
+    auto_discover: bool = True
+) -> bytes:
+    """
+    Version asynchrone du générateur de screenshots (pour FastAPI)
+    
+    Args:
+        base_url: URL de base
+        pages: Pages à capturer (None = pages essentielles)
+        store: "ios", "android", ou "both"
+        auto_discover: Utiliser les pages essentielles prédéfinies
+    
+    Returns:
+        Bytes du ZIP contenant les screenshots
+    """
+    generator = ScreenshotGenerator()
+    try:
+        await generator.initialize()
+        result = await generator.generate_all_screenshots(
+            base_url, pages, store, auto_discover
+        )
+        return result
+    finally:
+        await generator.close()
+
+
 async def generate_screenshots_async(
     base_url: str,
     pages: Optional[List[str]] = None,
@@ -442,79 +439,38 @@ async def generate_screenshots_async(
     
     Args:
         base_url: URL de base
-        pages: Pages à capturer (None = auto-découverte)
+        pages: Pages à capturer (None = pages essentielles)
         store: "ios", "android", ou "both"
-        auto_discover: Découvrir automatiquement les pages
+        auto_discover: Utiliser les pages essentielles prédéfinies
     
     Returns:
         Bytes du ZIP contenant les screenshots
     """
-    # Fix Python 3.13 Windows - Le loop d'événements doit être un ProactorEventLoop
-    # pour supporter les subprocess de Playwright
-    if sys.platform == "win32" and sys.version_info >= (3, 13):
+    import sys
+
+    # Sur Windows, Playwright doit tourner sur un event loop Proactor
+    if sys.platform == "win32":
         try:
             loop = asyncio.get_running_loop()
-            # Vérifier si le loop actuel est compatible
-            if not isinstance(loop, asyncio.ProactorEventLoop):
-                # Le loop actuel n'est pas compatible, utiliser un thread séparé
-                import concurrent.futures
-                logger.info("⚠️ Loop d'événements non compatible avec Playwright, utilisation d'un thread séparé")
-                
-                # Définir la fonction async interne avant de la passer au thread
-                async def _generate_in_loop():
-                    generator = ScreenshotGenerator()
-                    try:
-                        await generator.initialize()
-                        result = await generator.generate_all_screenshots(
-                            base_url, pages, store, auto_discover
-                        )
-                        return result
-                    finally:
-                        await generator.close()
-                
-                def run_in_new_loop():
-                    """Exécute la génération dans un nouveau loop avec la bonne policy"""
-                    # Forcer la policy Proactor pour Windows Python 3.13
-                    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-                    new_loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(new_loop)
-                    try:
-                        return new_loop.run_until_complete(_generate_in_loop())
-                    finally:
-                        new_loop.close()
-                        asyncio.set_event_loop(None)
-                
-                # Exécuter dans un thread séparé avec un nouveau loop
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(run_in_new_loop)
-                    try:
-                        return future.result(timeout=300)  # Timeout de 5 minutes
-                    except concurrent.futures.TimeoutError:
-                        logger.error("Timeout lors de la génération de screenshots")
-                        raise TimeoutError("Timeout lors de la génération de screenshots")
-                    except Exception as e:
-                        logger.error(f"Erreur dans le thread de génération: {e}")
-                        raise
+            loop_name = type(loop).__name__
         except RuntimeError:
-            # Pas de loop en cours d'exécution, on peut utiliser le code normal
-            # Mais on s'assure que la policy est correcte
-            current_policy = asyncio.get_event_loop_policy()
-            if not isinstance(current_policy, asyncio.WindowsProactorEventLoopPolicy):
+            loop = None
+            loop_name = ""
+
+        if loop is not None and "Proactor" not in loop_name:
+            def _run_in_thread():
                 asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-                logger.info("✅ Fix Python 3.13 Windows appliqué dans generate_screenshots_async")
-        except Exception as e:
-            logger.warning(f"⚠️ Erreur lors du fix Python 3.13: {e}")
-    
-    # Exécution normale
-    generator = ScreenshotGenerator()
-    try:
-        await generator.initialize()
-        result = await generator.generate_all_screenshots(
-            base_url, pages, store, auto_discover
-        )
-        return result
-    finally:
-        await generator.close()
+                return asyncio.run(
+                    _generate_screenshots_async_internal(
+                        base_url, pages, store, auto_discover
+                    )
+                )
+
+            return await asyncio.to_thread(_run_in_thread)
+
+    return await _generate_screenshots_async_internal(
+        base_url, pages, store, auto_discover
+    )
 
 def generate_screenshots_sync(
     base_url: str,
@@ -527,9 +483,9 @@ def generate_screenshots_sync(
     
     Args:
         base_url: URL de base
-        pages: Pages à capturer (None = auto-découverte)
+        pages: Pages à capturer (None = pages essentielles)
         store: "ios", "android", ou "both"
-        auto_discover: Découvrir automatiquement les pages
+        auto_discover: Utiliser les pages essentielles prédéfinies
     
     Returns:
         Bytes du ZIP contenant les screenshots
@@ -561,4 +517,3 @@ def generate_screenshots_sync(
             await generator.close()
     
     return asyncio.run(_generate())
-

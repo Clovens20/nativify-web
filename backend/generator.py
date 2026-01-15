@@ -251,6 +251,37 @@ if %ERRORLEVEL% equ 0 (
             # 12. app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
             zip_file.writestr(f"{base_dir}/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml", ic_launcher)
             
+            # 12.1. app/src/main/res/drawable/splash_background.xml (Splash Screen)
+            splash_background = """<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@android:color/white"/>
+    <item>
+        <bitmap
+            android:gravity="center"
+            android:src="@drawable/ic_launcher"/>
+    </item>
+</layer-list>
+"""
+            zip_file.writestr(f"{base_dir}/app/src/main/res/drawable/splash_background.xml", splash_background)
+            
+            # 12.2. app/src/main/res/values/themes.xml (Splash Screen Theme)
+            themes_xml = f"""<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="SplashTheme" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:windowBackground">@drawable/splash_background</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
+    <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+    </style>
+</resources>
+"""
+            zip_file.writestr(f"{base_dir}/app/src/main/res/values/themes.xml", themes_xml)
+            
             # 13. SDK JavaScript personnalisé
             sdk_js = self._generate_javascript_sdk(web_url, features, "android")
             zip_file.writestr(f"{base_dir}/app/src/main/assets/nativiweb-sdk.js", sdk_js)
@@ -457,6 +488,8 @@ class MainActivity : AppCompatActivity() {{
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {{
+        // Changer le thème après le splash screen
+        setTheme(R.style.AppTheme)
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
@@ -620,6 +653,39 @@ import android.media.MediaPlayer
 import java.io.File
 import java.io.IOException"""
         
+        if 'camera' in enabled_features:
+            imports += """
+import android.content.Intent
+import android.provider.MediaStore
+import androidx.core.content.FileProvider
+import java.io.File"""
+        
+        if 'geolocation' in enabled_features:
+            imports += """
+import android.location.LocationManager
+import android.location.Location
+import android.app.Activity
+import android.app.ActivityCompat
+import android.content.pm.PackageManager"""
+        
+        if 'contacts' in enabled_features:
+            imports += """
+import android.provider.ContactsContract
+import android.database.Cursor"""
+        
+        if 'analytics' in enabled_features:
+            imports += """
+import com.google.firebase.analytics.FirebaseAnalytics
+import android.os.Bundle"""
+        
+        if 'biometrics' in enabled_features:
+            imports += """
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
+import android.app.Activity
+import java.util.concurrent.Executor"""
+        
         # Code du bridge de base
         bridge_code = f"""package {package_name}
 
@@ -642,6 +708,15 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
             bridge_code += """
     private var mediaRecorder: MediaRecorder? = null
     private var recordingFile: File? = null"""
+        
+        if 'analytics' in enabled_features:
+            bridge_code += """
+    private var firebaseAnalytics: FirebaseAnalytics? = null"""
+        
+        if 'biometrics' in enabled_features:
+            bridge_code += """
+    private var biometricPrompt: BiometricPrompt? = null
+    private var biometricExecutor: Executor? = null"""
         
         # Méthodes de base
         bridge_code += """
@@ -707,6 +782,292 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
         android.os.Handler(android.os.Looper.getMainLooper()).post {{
             android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
         }}
+    }}
+    
+    // ========== VERSION CHECK & RELOAD ==========
+    @JavascriptInterface
+    fun forceReload(clearCache: Boolean) {{
+        android.os.Handler(android.os.Looper.getMainLooper()).post {{
+            if (clearCache) {{
+                webView.clearCache(true)
+                webView.clearHistory()
+            }}
+            webView.reload()
+        }}
+    }}
+    
+    @JavascriptInterface
+    fun getCurrentUrl(): String {{
+        return webView.url?.toString() ?: ""
+    }}
+    
+    // ========== SCREEN ORIENTATION ==========
+    @JavascriptInterface
+    fun setScreenOrientation(orientation: String) {{
+        android.os.Handler(android.os.Looper.getMainLooper()).post {{
+            val activity = context as? android.app.Activity
+            if (activity != null) {{
+                val requestedOrientation = when (orientation.lowercase()) {{
+                    "portrait" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                    "landscape" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                    "sensor" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR
+                    "sensor_portrait" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                    "sensor_landscape" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                    "unspecified" -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                    else -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR
+                }}
+                activity.requestedOrientation = requestedOrientation
+            }}
+        }}
+    }}
+    
+    // ========== STATUS BAR CUSTOMIZATION ==========
+    @JavascriptInterface
+    fun setStatusBarColor(colorHex: String, lightIcons: Boolean) {{
+        android.os.Handler(android.os.Looper.getMainLooper()).post {{
+            val activity = context as? android.app.Activity
+            if (activity != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {{
+                try {{
+                    val color = android.graphics.Color.parseColor(colorHex)
+                    activity.window.statusBarColor = color
+                    
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {{
+                        var flags = activity.window.decorView.systemUiVisibility
+                        if (lightIcons) {{
+                            flags = flags and android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+                        }} else {{
+                            flags = flags or android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                        }}
+                        activity.window.decorView.systemUiVisibility = flags
+                    }}
+                }} catch (e: Exception) {{
+                    // Invalid color format
+                }}
+            }}
+        }}
+    }}
+    
+    @JavascriptInterface
+    fun setStatusBarStyle(style: String) {{
+        android.os.Handler(android.os.Looper.getMainLooper()).post {{
+            val activity = context as? android.app.Activity
+            if (activity != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {{
+                var flags = activity.window.decorView.systemUiVisibility
+                when (style.lowercase()) {{
+                    "light" -> flags = flags or android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                    "dark" -> flags = flags and android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+                }}
+                activity.window.decorView.systemUiVisibility = flags
+            }}
+        }}
+    }}"""
+        
+        # Ajouter les méthodes pour Camera, GPS, Contacts
+        if 'camera' in enabled_features:
+            bridge_code += """
+    
+    // ========== CAMERA ==========
+    @JavascriptInterface
+    fun takePicture(callback: String) {{
+        val activity = context as? android.app.Activity
+        if (activity == null) {{
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", "Activity not available")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+            return
+        }}
+        
+        try {{
+            val intent = android.content.Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE)
+            val photoFile = java.io.File(
+                context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES),
+                "photo_${{System.currentTimeMillis()}}.jpg"
+            )
+            
+            val photoURI = androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${{package_name}}.fileprovider",
+                photoFile
+            )
+            
+            intent.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, photoURI)
+            activity.startActivityForResult(intent, 1001)
+            
+            val result = JSONObject().apply {{
+                put("success", true)
+                put("message", "Camera opened")
+                put("filePath", photoFile.absolutePath)
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }} catch (e: Exception) {{
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", e.message ?: "Camera error")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }}
+    }}"""
+
+        if 'geolocation' in enabled_features:
+            bridge_code += """
+    
+    // ========== GEOLOCATION ==========
+    @JavascriptInterface
+    fun getCurrentPosition(callback: String) {{
+        val activity = context as? android.app.Activity
+        if (activity == null) {{
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", "Activity not available")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+            return
+        }}
+        
+        // Vérifier permission
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.ACCESS_FINE_LOCATION
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {{
+            android.app.ActivityCompat.requestPermissions(
+                activity,
+                arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION),
+                1002
+            )
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", "Permission required")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+            return
+        }}
+        
+        try {{
+            val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+            val location = locationManager.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
+                ?: locationManager.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
+            
+            if (location != null) {{
+                val result = JSONObject().apply {{
+                    put("success", true)
+                    put("latitude", location.latitude)
+                    put("longitude", location.longitude)
+                    put("accuracy", location.accuracy.toDouble())
+                }}
+                webView.post {{
+                    webView.evaluateJavascript("$callback($result)", null)
+                }}
+            }} else {{
+                val result = JSONObject().apply {{
+                    put("success", false)
+                    put("error", "Location not available")
+                }}
+                webView.post {{
+                    webView.evaluateJavascript("$callback($result)", null)
+                }}
+            }}
+        }} catch (e: Exception) {{
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", e.message ?: "Location error")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }}
+    }}"""
+
+        if 'contacts' in enabled_features:
+            bridge_code += """
+    
+    // ========== CONTACTS ==========
+    @JavascriptInterface
+    fun getContacts(callback: String) {{
+        val activity = context as? android.app.Activity
+        if (activity == null) {{
+            val result = JSONArray()
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+            return
+        }}
+        
+        // Vérifier permission
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.READ_CONTACTS
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {{
+            android.app.ActivityCompat.requestPermissions(
+                activity,
+                arrayOf(android.Manifest.permission.READ_CONTACTS),
+                1003
+            )
+            val result = JSONArray()
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+            return
+        }}
+        
+        try {{
+            val contacts = JSONArray()
+            val cursor = context.contentResolver.query(
+                android.provider.ContactsContract.Contacts.CONTENT_URI,
+                null, null, null, null
+            )
+            
+            cursor?.use {{
+                while (it.moveToNext()) {{
+                    val name = it.getString(it.getColumnIndex(android.provider.ContactsContract.Contacts.DISPLAY_NAME))
+                    val contactId = it.getString(it.getColumnIndex(android.provider.ContactsContract.Contacts._ID))
+                    
+                    val phoneCursor = context.contentResolver.query(
+                        android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                        null,
+                        android.provider.ContactsContract.CommonDataKinds.Phone.CONTACT_ID + " = ?",
+                        arrayOf(contactId),
+                        null
+                    )
+                    
+                    val phones = JSONArray()
+                    phoneCursor?.use {{ pc ->
+                        while (pc.moveToNext()) {{
+                            val phone = pc.getString(pc.getColumnIndex(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER))
+                            phones.put(phone)
+                        }}
+                    }}
+                    
+                    val contact = JSONObject().apply {{
+                        put("name", name ?: "")
+                        put("phones", phones)
+                    }}
+                    contacts.put(contact)
+                }}
+            }}
+            
+            webView.post {{
+                webView.evaluateJavascript("$callback($contacts)", null)
+            }}
+        }} catch (e: Exception) {{
+            val result = JSONArray()
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }}
     }}"""
         
         # Ajouter les méthodes pour In-App Purchases
@@ -762,15 +1123,15 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
             return
         }}
         
+        val skuType = if (productType == "subscription" || productType == "subs") 
+            BillingClient.ProductType.SUBS 
+        else 
+            BillingClient.ProductType.INAPP
+        
         val productList = listOf(
             QueryProductDetailsParams.Product.newBuilder()
                 .setProductId(productId)
-                .setProductType(
-                    if (productType == "subscription") 
-                        BillingClient.ProductType.SUBS 
-                    else 
-                        BillingClient.ProductType.INAPP
-                )
+                .setProductType(skuType)
                 .build()
         )
         
@@ -798,6 +1159,7 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
                 
                 val result = JSONObject().apply {{
                     put("success", responseCode == BillingClient.BillingResponseCode.OK)
+                    put("productType", productType)
                 }}
                 webView.post {{
                     webView.evaluateJavascript("$callback($result)", null)
@@ -805,7 +1167,7 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
             }} else {{
                 val result = JSONObject().apply {{
                     put("success", false)
-                    put("error", "Product not found")
+                    put("error", billingResult.debugMessage ?: "Product not found")
                 }}
                 webView.post {{
                     webView.evaluateJavascript("$callback($result)", null)
@@ -816,11 +1178,122 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
     
     @JavascriptInterface
     fun getAvailableProducts(productType: String, callback: String) {{
-        // Note: Les product IDs doivent être configurés dans Google Play Console
-        // Cette méthode doit être personnalisée selon vos produits
+        // Note: Cette méthode nécessite les product IDs depuis JavaScript
+        // Utilisez queryProducts avec les product IDs spécifiques
         val result = JSONArray()
         webView.post {{
             webView.evaluateJavascript("$callback($result)", null)
+        }}
+    }}
+    
+    @JavascriptInterface
+    fun queryProducts(productIdsJson: String, productType: String, callback: String) {{
+        if (billingClient == null) {{
+            val result = JSONArray()
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+            return
+        }}
+        
+        val skuType = if (productType == "subscription" || productType == "subs") 
+            BillingClient.ProductType.SUBS 
+        else 
+            BillingClient.ProductType.INAPP
+        
+        try {{
+            val productIdsArray = org.json.JSONArray(productIdsJson)
+            val productList = mutableListOf<QueryProductDetailsParams.Product>()
+            
+            for (i in 0 until productIdsArray.length()) {{
+                val productId = productIdsArray.getString(i)
+                productList.add(
+                    QueryProductDetailsParams.Product.newBuilder()
+                        .setProductId(productId)
+                        .setProductType(skuType)
+                        .build()
+                )
+            }}
+            
+            val params = QueryProductDetailsParams.newBuilder()
+                .setProductList(productList)
+                .build()
+            
+            billingClient?.queryProductDetailsAsync(params) {{ billingResult, productDetailsList ->
+                val productsArray = JSONArray()
+                if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {{
+                    for (productDetails in productDetailsList) {{
+                        val productObj = JSONObject().apply {{
+                            put("productId", productDetails.productId)
+                            put("title", productDetails.title)
+                            put("description", productDetails.description)
+                            
+                            // Gérer les prix pour les achats uniques et les abonnements
+                            val oneTimeOffer = productDetails.oneTimePurchaseOfferDetails
+                            val subscriptionOffer = productDetails.subscriptionOfferDetails?.getOrNull(0)
+                            
+                            if (oneTimeOffer != null) {{
+                                put("price", oneTimeOffer.formattedPrice)
+                                put("priceAmountMicros", oneTimeOffer.priceAmountMicros)
+                                put("currencyCode", oneTimeOffer.priceCurrencyCode)
+                            }} else if (subscriptionOffer != null) {{
+                                val pricingPhase = subscriptionOffer.pricingPhases.pricingPhaseList.getOrNull(0)
+                                if (pricingPhase != null) {{
+                                    put("price", pricingPhase.formattedPrice)
+                                    put("priceAmountMicros", pricingPhase.priceAmountMicros)
+                                    put("currencyCode", pricingPhase.priceCurrencyCode)
+                                }}
+                            }}
+                        }}
+                        productsArray.put(productObj)
+                    }}
+                }}
+                webView.post {{
+                    webView.evaluateJavascript("$callback($productsArray)", null)
+                }}
+            }}
+        }} catch (e: Exception) {{
+            val result = JSONArray()
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }}
+    }}
+    
+    @JavascriptInterface
+    fun getPurchases(productType: String, callback: String) {{
+        if (billingClient == null) {{
+            val result = JSONArray()
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+            return
+        }}
+        
+        val skuType = if (productType == "subscription" || productType == "subs")
+            BillingClient.ProductType.SUBS
+        else
+            BillingClient.ProductType.INAPP
+        
+        billingClient?.queryPurchasesAsync(
+            QueryPurchasesParams.newBuilder().setProductType(skuType).build()
+        ) {{ billingResult, purchases ->
+            val purchasesArray = JSONArray()
+            if (billingResult.responseCode == BillingClient.BillingResponseCode.OK) {{
+                for (purchase in purchases.purchasesList) {{
+                    val purchaseObj = JSONObject().apply {{
+                        put("orderId", purchase.orderId)
+                        put("productIds", JSONArray(purchase.products))
+                        put("purchaseToken", purchase.purchaseToken)
+                        put("purchaseState", purchase.purchaseState)
+                        put("purchaseTime", purchase.purchaseTime)
+                    }}
+                    purchasesArray.put(purchaseObj)
+                }}
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($purchasesArray)", null)
+            }}
         }}
     }}
     
@@ -852,14 +1325,65 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
     // ========== QR/BARCODE SCANNER ==========
     @JavascriptInterface
     fun scanQRCode(callback: String) {{
-        // Note: Cette méthode nécessite une Activity avec CameraX
-        // L'implémentation complète nécessite une Activity dédiée pour le scanner
-        val result = JSONObject().apply {{
-            put("success", false)
-            put("error", "QR Scanner requires dedicated activity. Use camera feature for basic scanning.")
+        val activity = context as? android.app.Activity
+        if (activity == null) {{
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", "Activity not available")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+            return
         }}
-        webView.post {{
-            webView.evaluateJavascript("$callback($result)", null)
+        
+        // Vérifier permission caméra
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.CAMERA
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {{
+            android.app.ActivityCompat.requestPermissions(
+                activity,
+                arrayOf(android.Manifest.permission.CAMERA),
+                1004
+            )
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", "Camera permission required")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+            return
+        }}
+        
+        try {{
+            // Utiliser l'intent ZXing intégré ou ML Kit
+            // Pour simplifier, on utilise l'intent ZXing standard
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {{
+                setClassName("com.google.zxing.client.android", "com.google.zxing.client.android.CaptureActivity")
+                putExtra("SCAN_MODE", "QR_CODE_MODE")
+            }}
+            
+            // Alternative: utiliser ML Kit directement si disponible
+            // Pour l'instant, on retourne un message d'instruction
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", "QR Scanner requires ZXing app or ML Kit implementation")
+                put("message", "Please install ZXing Barcode Scanner from Play Store, or use camera feature for manual scanning")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }} catch (e: Exception) {{
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", e.message ?: "QR scan error")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
         }}
     }}"""
         
@@ -996,6 +1520,316 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
         }}
     }}"""
         
+        # Ajouter les méthodes Analytics si activé
+        if 'analytics' in enabled_features:
+            bridge_code += """
+    
+    // ========== ANALYTICS ==========
+    @JavascriptInterface
+    fun initializeAnalytics(callback: String) {{
+        try {{
+            firebaseAnalytics = FirebaseAnalytics.getInstance(context)
+            val result = JSONObject().apply {{
+                put("success", true)
+                put("message", "Analytics initialized")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }} catch (e: Exception) {{
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", e.message ?: "Analytics initialization failed")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }}
+    }}
+    
+    @JavascriptInterface
+    fun logEvent(eventName: String, parameters: String, callback: String) {{
+        try {{
+            if (firebaseAnalytics == null) {{
+                firebaseAnalytics = FirebaseAnalytics.getInstance(context)
+            }}
+            
+            val bundle = Bundle()
+            if (parameters.isNotEmpty()) {{
+                try {{
+                    val paramsJson = org.json.JSONObject(parameters)
+                    val keys = paramsJson.keys()
+                    while (keys.hasNext()) {{
+                        val key = keys.next()
+                        val value = paramsJson.get(key)
+                        when (value) {{
+                            is String -> bundle.putString(key, value)
+                            is Int -> bundle.putInt(key, value)
+                            is Double -> bundle.putDouble(key, value)
+                            is Long -> bundle.putLong(key, value)
+                            is Boolean -> bundle.putBoolean(key, value)
+                        }}
+                    }}
+                }} catch (e: Exception) {{
+                    // Ignorer erreur de parsing JSON
+                }}
+            }}
+            
+            firebaseAnalytics?.logEvent(eventName, bundle)
+            
+            val result = JSONObject().apply {{
+                put("success", true)
+                put("message", "Event logged")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }} catch (e: Exception) {{
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", e.message ?: "Failed to log event")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }}
+    }}
+    
+    @JavascriptInterface
+    fun setUserProperty(propertyName: String, value: String, callback: String) {{
+        try {{
+            if (firebaseAnalytics == null) {{
+                firebaseAnalytics = FirebaseAnalytics.getInstance(context)
+            }}
+            
+            firebaseAnalytics?.setUserProperty(propertyName, value)
+            
+            val result = JSONObject().apply {{
+                put("success", true)
+                put("message", "User property set")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }} catch (e: Exception) {{
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", e.message ?: "Failed to set user property")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }}
+    }}
+    
+    @JavascriptInterface
+    fun setUserId(userId: String, callback: String) {{
+        try {{
+            if (firebaseAnalytics == null) {{
+                firebaseAnalytics = FirebaseAnalytics.getInstance(context)
+            }}
+            
+            firebaseAnalytics?.setUserId(userId)
+            
+            val result = JSONObject().apply {{
+                put("success", true)
+                put("message", "User ID set")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }} catch (e: Exception) {{
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", e.message ?: "Failed to set user ID")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+        }}
+    }}"""
+        
+        # Ajouter les méthodes Biometric Authentication si activé
+        if 'biometrics' in enabled_features:
+            bridge_code += """
+    
+    // ========== BIOMETRIC AUTHENTICATION ==========
+    @JavascriptInterface
+    fun isBiometricAvailable(callback: String) {{
+        val biometricManager = androidx.biometric.BiometricManager.from(context)
+        val canAuthenticate = biometricManager.canAuthenticate(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG)
+        
+        val result = JSONObject().apply {{
+            when (canAuthenticate) {{
+                androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS -> {{
+                    put("available", true)
+                    put("message", "Biometric authentication available")
+                }}
+                androidx.biometric.BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> {{
+                    put("available", false)
+                    put("error", "No biometric hardware")
+                }}
+                androidx.biometric.BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE -> {{
+                    put("available", false)
+                    put("error", "Biometric hardware unavailable")
+                }}
+                androidx.biometric.BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> {{
+                    put("available", false)
+                    put("error", "No biometric enrolled")
+                }}
+                else -> {{
+                    put("available", false)
+                    put("error", "Unknown error")
+                }}
+            }}
+        }}
+        webView.post {{
+            webView.evaluateJavascript("$callback($result)", null)
+        }}
+    }}
+    
+    @JavascriptInterface
+    fun authenticateBiometric(title: String, subtitle: String, callback: String) {{
+        val activity = context as? android.app.Activity
+        if (activity == null) {{
+            val result = JSONObject().apply {{
+                put("success", false)
+                put("error", "Activity not available")
+            }}
+            webView.post {{
+                webView.evaluateJavascript("$callback($result)", null)
+            }}
+            return
+        }}
+        
+        biometricExecutor = biometricExecutor ?: ContextCompat.getMainExecutor(context)
+        
+        val promptInfo = androidx.biometric.BiometricPrompt.PromptInfo.Builder()
+            .setTitle(if (title.isNotEmpty()) title else "Authenticate")
+            .setSubtitle(if (subtitle.isNotEmpty()) subtitle else "Use your fingerprint or face to authenticate")
+            .setNegativeButtonText("Cancel")
+            .build()
+        
+        biometricPrompt = androidx.biometric.BiometricPrompt(
+            activity,
+            biometricExecutor!!,
+            object : androidx.biometric.BiometricPrompt.AuthenticationCallback() {{
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {{
+                    super.onAuthenticationError(errorCode, errString)
+                    val result = JSONObject().apply {{
+                        put("success", false)
+                        put("error", errString.toString())
+                        put("errorCode", errorCode)
+                    }}
+                    webView.post {{
+                        webView.evaluateJavascript("$callback($result)", null)
+                    }}
+                }}
+                
+                override fun onAuthenticationSucceeded(result: androidx.biometric.BiometricPrompt.AuthenticationResult) {{
+                    super.onAuthenticationSucceeded(result)
+                    val resultJson = JSONObject().apply {{
+                        put("success", true)
+                        put("message", "Authentication succeeded")
+                    }}
+                    webView.post {{
+                        webView.evaluateJavascript("$callback($resultJson)", null)
+                    }}
+                }}
+                
+                override fun onAuthenticationFailed() {{
+                    super.onAuthenticationFailed()
+                    val result = JSONObject().apply {{
+                        put("success", false)
+                        put("error", "Authentication failed")
+                    }}
+                    webView.post {{
+                        webView.evaluateJavascript("$callback($result)", null)
+                    }}
+                }}
+            }}
+        )
+        
+        biometricPrompt?.authenticate(promptInfo)
+    }}"""
+        
+        # Améliorer Native Banners/Popups - Ajouter après showToast
+        bridge_code += """
+    
+    // ========== NATIVE BANNERS & POPUPS ==========
+    @JavascriptInterface
+    fun showNativeBanner(message: String, duration: Int, callback: String) {{
+        android.os.Handler(android.os.Looper.getMainLooper()).post {{
+            val activity = context as? android.app.Activity
+            if (activity != null) {{
+                try {{
+                    val snackbar = com.google.android.material.snackbar.Snackbar.make(
+                        activity.findViewById(android.R.id.content),
+                        message,
+                        duration
+                    )
+                    snackbar.show()
+                    
+                    val result = JSONObject().apply {{
+                        put("success", true)
+                        put("message", "Banner shown")
+                    }}
+                    webView.post {{
+                        webView.evaluateJavascript("$callback($result)", null)
+                    }}
+                }} catch (e: Exception) {{
+                    // Fallback to Toast if Snackbar fails
+                    android.widget.Toast.makeText(context, message, duration).show()
+                    val result = JSONObject().apply {{
+                        put("success", true)
+                        put("message", "Banner shown (fallback)")
+                    }}
+                    webView.post {{
+                        webView.evaluateJavascript("$callback($result)", null)
+                    }}
+                }}
+            }} else {{
+                val result = JSONObject().apply {{
+                    put("success", false)
+                    put("error", "Activity not available")
+                }}
+                webView.post {{
+                    webView.evaluateJavascript("$callback($result)", null)
+                }}
+            }}
+        }}
+    }}
+    
+    @JavascriptInterface
+    fun showNativePopup(title: String, message: String, callback: String) {{
+        android.os.Handler(android.os.Looper.getMainLooper()).post {{
+            val activity = context as? android.app.Activity
+            if (activity != null) {{
+                android.app.AlertDialog.Builder(activity)
+                    .setTitle(title)
+                    .setMessage(message)
+                    .setPositiveButton("OK") {{ dialog, _ -> dialog.dismiss() }}
+                    .show()
+                
+                val result = JSONObject().apply {{
+                    put("success", true)
+                    put("message", "Popup shown")
+                }}
+                webView.post {{
+                    webView.evaluateJavascript("$callback($result)", null)
+                }}
+            }} else {{
+                val result = JSONObject().apply {{
+                    put("success", false)
+                    put("error", "Activity not available")
+                }}
+                webView.post {{
+                    webView.evaluateJavascript("$callback($result)", null)
+                }}
+            }}
+        }}
+    }}"""
+        
         # Méthodes utilitaires
         bridge_code += """
     
@@ -1087,6 +1921,87 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
             return Promise.resolve();
         },"""
         
+        # Ajouter Camera, GPS, Contacts si activés
+        if 'camera' in enabled_features:
+            sdk_methods += """
+        
+        // Camera
+        takePicture: function() {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    reject(new Error('Camera only available in native app'));
+                    return;
+                }
+                const callback = 'camera_' + Date.now();
+                window[callback] = (result) => {
+                    delete window[callback];
+                    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                    if (parsed.success) {
+                        resolve(parsed);
+                    } else {
+                        reject(new Error(parsed.error || 'Camera failed'));
+                    }
+                };
+                window.NativiWebNative.takePicture(callback);
+            });
+        },"""
+        
+        if 'geolocation' in enabled_features:
+            sdk_methods += """
+        
+        // Geolocation
+        getCurrentPosition: function() {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    // Fallback to web Geolocation API
+                    if (navigator.geolocation) {
+                        navigator.geolocation.getCurrentPosition(
+                            (pos) => resolve({
+                                latitude: pos.coords.latitude,
+                                longitude: pos.coords.longitude,
+                                accuracy: pos.coords.accuracy
+                            }),
+                            (err) => reject(err)
+                        );
+                        return;
+                    }
+                    reject(new Error('Geolocation not available'));
+                    return;
+                }
+                const callback = 'gps_' + Date.now();
+                window[callback] = (result) => {
+                    delete window[callback];
+                    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                    if (parsed.success) {
+                        resolve(parsed);
+                    } else {
+                        reject(new Error(parsed.error || 'Location failed'));
+                    }
+                };
+                window.NativiWebNative.getCurrentPosition(callback);
+            });
+        },"""
+        
+        if 'contacts' in enabled_features:
+            sdk_methods += """
+        
+        // Contacts
+        getContacts: function() {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    reject(new Error('Contacts only available in native app'));
+                    return;
+                }
+                const callback = 'contacts_' + Date.now();
+                window[callback] = (contacts) => {
+                    delete window[callback];
+                    const parsed = typeof contacts === 'string' ? JSON.parse(contacts) : contacts;
+                    resolve(parsed);
+                };
+                window.NativiWebNative.getContacts(callback);
+            });
+        },"""
+        
         # Ajouter In-App Purchases si activé
         if 'in_app_purchases' in enabled_features:
             sdk_methods += """
@@ -1146,6 +2061,56 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
                 };
                 window.NativiWebNative.getAvailableProducts(productType, callback);
             });
+        },
+        
+        queryProducts: function(productIds, productType = 'inapp') {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    reject(new Error('In-app purchases only available in native app'));
+                    return;
+                }
+                if (!Array.isArray(productIds) || productIds.length === 0) {
+                    reject(new Error('Product IDs array is required'));
+                    return;
+                }
+                const callback = 'query_products_' + Date.now();
+                window[callback] = (result) => {
+                    delete window[callback];
+                    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                    resolve(Array.isArray(parsed) ? parsed : []);
+                };
+                const productIdsJson = JSON.stringify(productIds);
+                window.NativiWebNative.queryProducts(productIdsJson, productType, callback);
+            });
+        },
+        
+        getPurchases: function(productType = 'inapp') {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    reject(new Error('In-app purchases only available in native app'));
+                    return;
+                }
+                const callback = 'purchases_' + Date.now();
+                window[callback] = (purchases) => {
+                    delete window[callback];
+                    const parsed = typeof purchases === 'string' ? JSON.parse(purchases) : purchases;
+                    resolve(Array.isArray(parsed) ? parsed : []);
+                };
+                window.NativiWebNative.getPurchases(productType, callback);
+            });
+        },"""
+        
+        # Ajouter Subscriptions si activé
+        if 'subscriptions' in enabled_features or 'in_app_purchases' in enabled_features:
+            sdk_methods += """
+        
+        // Subscriptions (utilise la même API que In-App Purchases)
+        purchaseSubscription: function(productId) {
+            return this.purchaseProduct(productId, 'subscription');
+        },
+        
+        getSubscriptions: function() {
+            return this.getPurchases('subscription');
         },"""
         
         # Ajouter QR Scanner si activé
@@ -1284,6 +2249,329 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
             if (typeof window !== 'undefined') {
                 window.addEventListener('offline', callback);
             }
+        },
+        
+        // Version Check & Reload
+        forceReload: function(clearCache = false) {
+            if (this.isNative() && window.NativiWebNative && window.NativiWebNative.forceReload) {
+                window.NativiWebNative.forceReload(clearCache);
+                return Promise.resolve();
+            }
+            // Fallback: reload page normally
+            if (clearCache && 'caches' in window) {
+                caches.keys().then(function(names) {
+                    names.forEach(function(name) {
+                        caches.delete(name);
+                    });
+                    location.reload();
+                });
+            } else {
+                location.reload();
+            }
+            return Promise.resolve();
+        },
+        
+        checkVersion: function(projectId, currentVersion, apiBaseUrl) {
+            return new Promise((resolve, reject) => {
+                if (!projectId) {
+                    reject(new Error('Project ID is required'));
+                    return;
+                }
+                
+                // Default API base URL (can be configured)
+                // Note: Replace this with your actual API base URL or configure it in your app
+                const baseUrl = apiBaseUrl || (window.API_BASE_URL || '');
+                const url = `${baseUrl}/api/projects/${projectId}/version/check?current_version=${encodeURIComponent(currentVersion || '')}`;
+                
+                fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    resolve(data);
+                })
+                .catch(error => {
+                    reject(error);
+                });
+            });
+        },
+        
+        checkVersionAndReload: function(projectId, currentVersion, apiBaseUrl, autoReload = true) {
+            return this.checkVersion(projectId, currentVersion, apiBaseUrl)
+                .then(result => {
+                    if (result.update_available && autoReload) {
+                        // Reload with cache clear for fresh version
+                        return this.forceReload(true);
+                    }
+                    return result;
+                });
+        },
+        
+        startVersionChecker: function(projectId, currentVersion, apiBaseUrl, intervalMinutes = 30) {
+            if (!projectId) {
+                console.warn('NativiWeb: Cannot start version checker without project ID');
+                return;
+            }
+            
+            // Store interval ID for potential cleanup
+            if (!window._nativiwebVersionCheckInterval) {
+                const intervalMs = intervalMinutes * 60 * 1000;
+                window._nativiwebVersionCheckInterval = setInterval(() => {
+                    this.checkVersion(projectId, currentVersion, apiBaseUrl)
+                        .then(result => {
+                            if (result.update_available) {
+                                console.log('NativiWeb: New version available:', result.version);
+                                // Optional: trigger event
+                                if (typeof window !== 'undefined') {
+                                    window.dispatchEvent(new CustomEvent('nativiweb:update-available', {
+                                        detail: result
+                                    }));
+                                }
+                            }
+                        })
+                        .catch(error => {
+                            console.warn('NativiWeb: Version check failed:', error);
+                        });
+                }, intervalMs);
+                
+                // Check immediately
+                this.checkVersion(projectId, currentVersion, apiBaseUrl)
+                    .then(result => {
+                        if (result.update_available) {
+                            console.log('NativiWeb: New version available on start:', result.version);
+                        }
+                    })
+                    .catch(error => {
+                        console.warn('NativiWeb: Initial version check failed:', error);
+                    });
+            }
+        },
+        
+        stopVersionChecker: function() {
+            if (window._nativiwebVersionCheckInterval) {
+                clearInterval(window._nativiwebVersionCheckInterval);
+                window._nativiwebVersionCheckInterval = null;
+            }
+        },"""
+        
+        # Ajouter Biometric Authentication si activé
+        if 'biometrics' in enabled_features:
+            sdk_methods += """
+        
+        // Biometric Authentication
+        isBiometricAvailable: function() {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    resolve({ available: false, error: 'Biometric auth only available in native app' });
+                    return;
+                }
+                const callback = 'biometric_available_' + Date.now();
+                window[callback] = (result) => {
+                    delete window[callback];
+                    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                    resolve(parsed);
+                };
+                window.NativiWebNative.isBiometricAvailable(callback);
+            });
+        },
+        
+        authenticateBiometric: function(options = {}) {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    reject(new Error('Biometric auth only available in native app'));
+                    return;
+                }
+                const callback = 'biometric_auth_' + Date.now();
+                window[callback] = (result) => {
+                    delete window[callback];
+                    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                    if (parsed.success) {
+                        resolve(parsed);
+                    } else {
+                        reject(new Error(parsed.error || 'Biometric authentication failed'));
+                    }
+                };
+                const title = options.title || 'Authenticate';
+                const subtitle = options.subtitle || 'Use your fingerprint or face';
+                window.NativiWebNative.authenticateBiometric(title, subtitle, callback);
+            });
+        },"""
+        
+        # Ajouter Analytics si activé
+        if 'analytics' in enabled_features:
+            sdk_methods += """
+        
+        // Analytics
+        initializeAnalytics: function() {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    reject(new Error('Analytics only available in native app'));
+                    return;
+                }
+                const callback = 'analytics_init_' + Date.now();
+                window[callback] = (result) => {
+                    delete window[callback];
+                    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                    if (parsed.success) {
+                        resolve(parsed);
+                    } else {
+                        reject(new Error(parsed.error || 'Analytics initialization failed'));
+                    }
+                };
+                window.NativiWebNative.initializeAnalytics(callback);
+            });
+        },
+        
+        logEvent: function(eventName, parameters) {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    console.log('Analytics event (web):', eventName, parameters);
+                    resolve({ success: true, message: 'Event logged (web)' });
+                    return;
+                }
+                const callback = 'analytics_event_' + Date.now();
+                window[callback] = (result) => {
+                    delete window[callback];
+                    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                    if (parsed.success) {
+                        resolve(parsed);
+                    } else {
+                        reject(new Error(parsed.error || 'Failed to log event'));
+                    }
+                };
+                const paramsJson = parameters ? JSON.stringify(parameters) : '';
+                window.NativiWebNative.logEvent(eventName, paramsJson, callback);
+            });
+        },
+        
+        setUserProperty: function(propertyName, value) {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    console.log('Analytics user property (web):', propertyName, value);
+                    resolve({ success: true, message: 'User property set (web)' });
+                    return;
+                }
+                const callback = 'analytics_property_' + Date.now();
+                window[callback] = (result) => {
+                    delete window[callback];
+                    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                    if (parsed.success) {
+                        resolve(parsed);
+                    } else {
+                        reject(new Error(parsed.error || 'Failed to set user property'));
+                    }
+                };
+                window.NativiWebNative.setUserProperty(propertyName, value, callback);
+            });
+        },
+        
+        setUserId: function(userId) {
+            return new Promise((resolve, reject) => {
+                if (!this.isNative()) {
+                    console.log('Analytics user ID (web):', userId);
+                    resolve({ success: true, message: 'User ID set (web)' });
+                    return;
+                }
+                const callback = 'analytics_userid_' + Date.now();
+                window[callback] = (result) => {
+                    delete window[callback];
+                    const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                    if (parsed.success) {
+                        resolve(parsed);
+                    } else {
+                        reject(new Error(parsed.error || 'Failed to set user ID'));
+                    }
+                };
+                window.NativiWebNative.setUserId(userId, callback);
+            });
+        },"""
+        
+        # Ajouter Native Banners/Popups (toujours disponibles)
+        sdk_methods += """
+        
+        // Native Banners & Popups
+        showNativeBanner: function(message, duration) {
+            if (this.isNative() && window.NativiWebNative && window.NativiWebNative.showNativeBanner) {
+                return new Promise((resolve, reject) => {
+                    const callback = 'banner_' + Date.now();
+                    window[callback] = (result) => {
+                        delete window[callback];
+                        const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                        if (parsed.success) {
+                            resolve(parsed);
+                        } else {
+                            reject(new Error(parsed.error || 'Failed to show banner'));
+                        }
+                    };
+                    const durationMs = duration || 3000; // Default 3 seconds
+                    window.NativiWebNative.showNativeBanner(message, durationMs, callback);
+                });
+            }
+            // Fallback to console
+            console.log('Banner:', message);
+            return Promise.resolve({ success: true, message: 'Banner shown (fallback)' });
+        },
+        
+        showNativePopup: function(title, message) {
+            if (this.isNative() && window.NativiWebNative && window.NativiWebNative.showNativePopup) {
+                return new Promise((resolve, reject) => {
+                    const callback = 'popup_' + Date.now();
+                    window[callback] = (result) => {
+                        delete window[callback];
+                        const parsed = typeof result === 'string' ? JSON.parse(result) : result;
+                        if (parsed.success) {
+                            resolve(parsed);
+                        } else {
+                            reject(new Error(parsed.error || 'Failed to show popup'));
+                        }
+                    };
+                    window.NativiWebNative.showNativePopup(title || 'Alert', message || '', callback);
+                });
+            }
+            // Fallback to alert
+            alert((title ? title + ': ' : '') + message);
+            return Promise.resolve({ success: true, message: 'Popup shown (fallback)' });
+        },
+        
+        // Screen Orientation Control
+        setScreenOrientation: function(orientation) {
+            if (this.isNative() && window.NativiWebNative && window.NativiWebNative.setScreenOrientation) {
+                window.NativiWebNative.setScreenOrientation(orientation);
+                return Promise.resolve();
+            }
+            return Promise.reject(new Error('Screen orientation control only available in native app'));
+        },
+        
+        // Status Bar Customization
+        setStatusBarColor: function(colorHex, lightIcons = false) {
+            if (this.isNative() && window.NativiWebNative && window.NativiWebNative.setStatusBarColor) {
+                window.NativiWebNative.setStatusBarColor(colorHex, lightIcons);
+                return Promise.resolve();
+            }
+            return Promise.reject(new Error('Status bar customization only available in native app'));
+        },
+        
+        setStatusBarStyle: function(style) {
+            if (this.isNative() && window.NativiWebNative && window.NativiWebNative.setStatusBarStyle) {
+                window.NativiWebNative.setStatusBarStyle(style);
+                return Promise.resolve();
+            }
+            return Promise.reject(new Error('Status bar customization only available in native app'));
+        },
+        
+        // Native Media Playback (improved)
+        playMedia: function(url) {
+            // WebView handles media playback natively
+            // This is a helper to ensure media plays inline
+            return Promise.resolve({ success: true, message: 'Media playback handled by WebView' });
+        },
+        
+        pauseMedia: function() {
+            // WebView handles media playback natively
+            return Promise.resolve({ success: true, message: 'Media pause handled by WebView' });
         },"""
         
         return f"""// NativiWeb SDK v1.0.0

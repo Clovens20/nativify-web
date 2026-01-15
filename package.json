@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "npm-run-all --parallel dev:frontend dev:backend",
     "dev:frontend": "next dev",
-    "dev:backend": "python -m uvicorn main:app --reload --app-dir backend",
+    "dev:backend": "cd backend && C:\\Users\\missi\\AppData\\Local\\Programs\\Python\\Python312\\python.exe start.py",
     "build": "next build",
     "build:backend": "cd backend && pip install -r requirements.txt",
     "start": "next start",

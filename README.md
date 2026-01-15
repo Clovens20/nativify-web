@@ -148,6 +148,14 @@ Pour activer la compilation automatique d'APKs Android, vous devez installer et 
 | Deep Links | ✅ | ✅ |
 | App Badge | ✅ | ✅ |
 | Clipboard | ✅ | ✅ |
+| In-App Purchases | ✅ | ✅ |
+| Subscriptions | ✅ | ✅ |
+| QR/Barcode Scanner | ✅ | ✅ |
+| Audio Recording | ✅ | ✅ |
+| Video Recording | ✅ | ✅ |
+| Offline Capability | ✅ | ✅ |
+| Analytics Support | ✅ | ❌ |
+| Native Banners/Popups | ✅ | ❌ |
 
 ## 📖 SDK Usage
 

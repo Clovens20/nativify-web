@@ -3,11 +3,8 @@ import { createClient } from './supabase';
 import { apiCache } from './api-cache';
 import { logger } from './logger';
 
-// In development, use relative URL (proxied by Next.js)
-// In production, use absolute URL from env variable
-const API_URL = process.env.NODE_ENV === 'production' 
-  ? (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000') + '/api'
-  : '/api';
+// Always use backend URL to avoid proxy timeouts in dev
+const API_URL = (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000') + '/api';
 
 // Create axios instance with interceptor to add auth token
 const apiClient = axios.create({
@@ -50,9 +47,7 @@ apiClient.interceptors.response.use(
   async (error) => {
     // Gérer les erreurs de connexion
     if (error.code === 'ECONNREFUSED' || error.message?.includes('Network Error') || error.message?.includes('ERR_CONNECTION_REFUSED')) {
-      const backendUrl = typeof window !== 'undefined' && process.env.NODE_ENV === 'production'
-        ? (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000')
-        : 'http://localhost:8000';
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000';
       logger.warn('[API] Backend non disponible', { backendUrl, url: error.config?.url });
       
       const customError = new Error('Le serveur backend n\'est pas disponible. Veuillez démarrer le serveur avec: npm run dev');
@@ -187,7 +182,7 @@ export const buildsApi = {
     try {
       const response = await apiClient.get(`/builds/${buildId}/download`, {
         responseType: 'blob', // TRÈS IMPORTANT pour recevoir un blob
-        timeout: 60000 // 60 secondes pour les gros fichiers
+        timeout: 900000 // 15 minutes pour permettre la compilation complète de l'APK
       });
       
       // Vérifier que la réponse est bien un blob
@@ -233,8 +228,8 @@ export const buildsApi = {
       
       // Utiliser fetch pour le streaming avec progression
       const BACKEND_URL = process.env.NODE_ENV === 'production' 
-        ? (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000')
-        : 'http://localhost:8000';
+        ? (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000')
+        : 'http://127.0.0.1:8000';
       
       const response = await fetch(`${BACKEND_URL}/api/builds/${buildId}/download`, {
         method: 'GET',

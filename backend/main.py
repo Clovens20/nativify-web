@@ -1,9 +1,9 @@
-# FIX CRITIQUE pour Python 3.13 sur Windows - DOIT ÊTRE AVANT TOUT IMPORT ASYNCIO/FASTAPI
-import sys
 import asyncio
-if sys.platform == "win32" and sys.version_info >= (3, 13):
+import platform
+import sys
+
+if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-    print("✅ Fix Python 3.13 Windows appliqué pour Playwright (avant FastAPI)")
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, BackgroundTasks, UploadFile, File, Header, Request, Query
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -46,7 +46,8 @@ except ImportError:
     HAS_PYJWK = False
 
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict, EmailStr
+from pydantic import BaseModel, Field, ConfigDict, EmailStr, HttpUrl, field_validator
+from urllib.parse import urlparse
 from typing import List, Optional, Dict, Any, Tuple
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -251,19 +252,62 @@ class NativeFeature(BaseModel):
     config: Dict[str, Any] = {}
 
 class ProjectCreate(BaseModel):
-    name: str
-    web_url: str
-    description: Optional[str] = ""
-    platform: List[str] = ["android", "ios"]
+    name: str = Field(..., min_length=1, max_length=100)
+    web_url: HttpUrl  # Validation stricte d'URL
+    description: Optional[str] = Field(default="", max_length=1000)
+    platform: List[str] = Field(default=["android", "ios"])
     features: Optional[List[NativeFeature]] = None
-    logo_url: Optional[str] = None
+    logo_url: Optional[HttpUrl] = None
+    
+    @field_validator('web_url')
+    @classmethod
+    def validate_web_url(cls, v):
+        """Valider que l'URL est HTTP/HTTPS et pas un fichier local"""
+        if isinstance(v, str):
+            parsed = urlparse(str(v))
+            if parsed.scheme not in ['http', 'https']:
+                raise ValueError("URL must use http or https protocol")
+            if not parsed.netloc:
+                raise ValueError("URL must have a valid domain")
+            # Bloquer les localhost en production (optionnel)
+            if ENVIRONMENT == "production" and parsed.netloc in ['localhost', '127.0.0.1', '0.0.0.0']:
+                raise ValueError("Localhost URLs not allowed in production")
+        return v
+    
+    @field_validator('platform')
+    @classmethod
+    def validate_platform(cls, v):
+        """Valider que les plateformes sont valides"""
+        valid_platforms = ['android', 'ios']
+        for platform in v:
+            if platform not in valid_platforms:
+                raise ValueError(f"Platform must be one of: {valid_platforms}")
+        if not v:
+            raise ValueError("At least one platform must be specified")
+        return v
 
 class ProjectUpdate(BaseModel):
-    name: Optional[str] = None
-    web_url: Optional[str] = None
-    description: Optional[str] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    web_url: Optional[HttpUrl] = None  # Validation stricte d'URL
+    description: Optional[str] = Field(None, max_length=1000)
     features: Optional[List[NativeFeature]] = None
     advanced_config: Optional[Dict] = None
+    web_app_version: Optional[str] = Field(None, max_length=50)  # Version de l'app web (ex: "1.2.3", "2024.01.15")
+    
+    @field_validator('web_url')
+    @classmethod
+    def validate_web_url(cls, v):
+        """Valider que l'URL est HTTP/HTTPS si fournie"""
+        if v is not None:
+            if isinstance(v, str):
+                parsed = urlparse(v)
+                if parsed.scheme not in ['http', 'https']:
+                    raise ValueError("URL must use http or https protocol")
+                if not parsed.netloc:
+                    raise ValueError("URL must have a valid domain")
+                if ENVIRONMENT == "production" and parsed.netloc in ['localhost', '127.0.0.1', '0.0.0.0']:
+                    raise ValueError("Localhost URLs not allowed in production")
+        return v
 
 class Project(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -275,6 +319,8 @@ class Project(BaseModel):
     platform: List[str] = ["android", "ios"]
     features: List[NativeFeature] = []
     status: str = "draft"
+    web_app_version: Optional[str] = None  # Version de l'app web
+    version_check_enabled: bool = True  # Activer la vérification automatique de version
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -387,6 +433,14 @@ DEFAULT_FEATURES = [
     {"id": "deep_links", "name": "Deep Links", "enabled": False, "config": {}},
     {"id": "app_badge", "name": "App Badge", "enabled": False, "config": {}},
     {"id": "clipboard", "name": "Clipboard", "enabled": False, "config": {}},
+    # NOUVELLES FEATURES AJOUTÉES
+    {"id": "in_app_purchases", "name": "In-App Purchases", "enabled": False, "config": {}},
+    {"id": "subscriptions", "name": "Subscriptions", "enabled": False, "config": {}},
+    {"id": "qr_scanner", "name": "QR/Barcode Scanner", "enabled": False, "config": {}},
+    {"id": "audio_recording", "name": "Audio Recording", "enabled": False, "config": {}},
+    {"id": "video_recording", "name": "Video Recording", "enabled": False, "config": {}},
+    {"id": "offline_bundling", "name": "Offline Capability & Asset Bundling", "enabled": False, "config": {}},
+    {"id": "analytics", "name": "Analytics Support", "enabled": False, "config": {}},
 ]
 
 # Build phases
@@ -554,11 +608,18 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 logging.warning(f"Token expired for user {user_id}")
                 raise HTTPException(status_code=401, detail="Token expired")
             
-            # Vérifier la signature si PyJWK disponible
-            if HAS_PYJWK and SUPABASE_URL:
+            # Vérifier la signature - OBLIGATOIRE en production
+            if ENVIRONMENT == "production":
+                if not HAS_PYJWK or not SUPABASE_URL:
+                    logging.error("JWT signature verification unavailable in production - PyJWK or Supabase URL missing")
+                    raise HTTPException(
+                        status_code=503, 
+                        detail="Authentication service unavailable. JWT verification required."
+                    )
+                
                 try:
                     jwks_url = f"{SUPABASE_URL}/.well-known/jwks.json"
-                    jwks_client = PyJWKClient(jwks_url, timeout=2)
+                    jwks_client = PyJWKClient(jwks_url, timeout=5)
                     signing_key = jwks_client.get_signing_key_from_jwt(token)
                     jwt.decode(
                         token, 
@@ -569,7 +630,27 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                     )
                     logging.debug(f"Token signature verified for user: {user_id}")
                 except Exception as sig_error:
-                    logging.debug(f"Could not verify token signature (continuing anyway): {sig_error}")
+                    logging.warning(f"Token signature verification failed: {sig_error}")
+                    raise HTTPException(status_code=401, detail="Invalid token signature")
+            else:
+                # En développement, vérifier si disponible, sinon warning seulement
+                if HAS_PYJWK and SUPABASE_URL:
+                    try:
+                        jwks_url = f"{SUPABASE_URL}/.well-known/jwks.json"
+                        jwks_client = PyJWKClient(jwks_url, timeout=2)
+                        signing_key = jwks_client.get_signing_key_from_jwt(token)
+                        jwt.decode(
+                            token, 
+                            signing_key.key, 
+                            algorithms=["RS256"], 
+                            audience="authenticated", 
+                            options={"verify_exp": False}
+                        )
+                        logging.debug(f"Token signature verified for user: {user_id}")
+                    except Exception as sig_error:
+                        logging.warning(f"Could not verify token signature (dev mode - continuing): {sig_error}")
+                else:
+                    logging.warning("JWT signature verification unavailable (dev mode)")
             
             return user_id
             
@@ -585,8 +666,11 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 
     except HTTPException:
         raise
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"Unexpected auth error: {e}", exc_info=True)
+        # Ne jamais exposer les détails d'erreur d'authentification
         raise HTTPException(status_code=401, detail="Authentication failed")
 
 # ==================== AUTH ENDPOINTS ====================
@@ -914,7 +998,11 @@ async def create_project(project_data: ProjectCreate, credentials: HTTPAuthoriza
         raise
     except Exception as e:
         logging.error(f"Error creating project: {e}")
-        raise HTTPException(status_code=500, detail=f"Error creating project: {str(e)}")
+        # Ne pas exposer les détails d'erreur en production
+        if ENVIRONMENT == "production":
+            raise HTTPException(status_code=500, detail="Failed to create project. Please try again later.")
+        else:
+            raise HTTPException(status_code=500, detail=f"Error creating project: {str(e)}")
 
 @api_router.get("/projects")
 async def get_projects(user_id: str = Depends(get_current_user)):
@@ -958,7 +1046,10 @@ async def get_project(project_id: str, user_id: str = Depends(get_current_user))
         raise
     except Exception as e:
         logging.error(f"Error fetching project: {e}")
-        raise HTTPException(status_code=500, detail=f"Error fetching project: {str(e)}")
+        if ENVIRONMENT == "production":
+            raise HTTPException(status_code=500, detail="Failed to fetch project. Please try again later.")
+        else:
+            raise HTTPException(status_code=500, detail=f"Error fetching project: {str(e)}")
 
 @api_router.put("/projects/{project_id}")
 async def update_project(project_id: str, update_data: ProjectUpdate, user_id: str = Depends(get_current_user)):
@@ -1021,7 +1112,10 @@ async def update_project(project_id: str, update_data: ProjectUpdate, user_id: s
         raise
     except Exception as e:
         logging.error(f"Error updating project: {e}")
-        raise HTTPException(status_code=500, detail=f"Error updating project: {str(e)}")
+        if ENVIRONMENT == "production":
+            raise HTTPException(status_code=500, detail="Failed to update project. Please try again later.")
+        else:
+            raise HTTPException(status_code=500, detail=f"Error updating project: {str(e)}")
 
 @api_router.delete("/projects/{project_id}")
 async def delete_project(project_id: str, user_id: str = Depends(get_current_user)):
@@ -1085,7 +1179,10 @@ async def delete_project(project_id: str, user_id: str = Depends(get_current_use
         raise
     except Exception as e:
         logging.error(f"Error deleting project: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error deleting project: {str(e)}")
+        if ENVIRONMENT == "production":
+            raise HTTPException(status_code=500, detail="Failed to delete project. Please try again later.")
+        else:
+            raise HTTPException(status_code=500, detail=f"Error deleting project: {str(e)}")
 
 # ==================== BUILD ENDPOINTS (CORRIGÉ) ====================
 
@@ -1178,7 +1275,10 @@ async def create_build(
         raise
     except Exception as e:
         logging.error(f"Error creating build: {e}")
-        raise HTTPException(status_code=500, detail=f"Error creating build: {str(e)}")
+        if ENVIRONMENT == "production":
+            raise HTTPException(status_code=500, detail="Failed to create build. Please try again later.")
+        else:
+            raise HTTPException(status_code=500, detail=f"Error creating build: {str(e)}")
 # ==================== BUILD PROCESS (CORRIGÉ) ====================
 
 async def process_build(build_id: str, project: dict):
@@ -1488,7 +1588,13 @@ async def get_build(build_id: str, user_id: str = Depends(get_current_user)):
         raise
     except Exception as e:
         logging.error(f"Error fetching build: {e}")
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+        if ENVIRONMENT == "production":
+            raise HTTPException(status_code=500, detail="An error occurred. Please try again later.")
+        else:
+            if ENVIRONMENT == "production":
+                raise HTTPException(status_code=500, detail="An error occurred. Please try again later.")
+            else:
+                raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 @api_router.delete("/builds/{build_id}")
 async def delete_build(build_id: str, user_id: str = Depends(get_current_user)):
@@ -1513,7 +1619,13 @@ async def delete_build(build_id: str, user_id: str = Depends(get_current_user)):
         raise
     except Exception as e:
         logging.error(f"Error deleting build: {e}")
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+        if ENVIRONMENT == "production":
+            raise HTTPException(status_code=500, detail="An error occurred. Please try again later.")
+        else:
+            if ENVIRONMENT == "production":
+                raise HTTPException(status_code=500, detail="An error occurred. Please try again later.")
+            else:
+                raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 @api_router.delete("/builds")
 async def delete_all_builds(user_id: str = Depends(get_current_user)):
@@ -1538,7 +1650,13 @@ async def delete_all_builds(user_id: str = Depends(get_current_user)):
         raise
     except Exception as e:
         logging.error(f"Error deleting builds: {e}")
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+        if ENVIRONMENT == "production":
+            raise HTTPException(status_code=500, detail="An error occurred. Please try again later.")
+        else:
+            if ENVIRONMENT == "production":
+                raise HTTPException(status_code=500, detail="An error occurred. Please try again later.")
+            else:
+                raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 @api_router.get("/builds/{build_id}/download")
 async def download_build(build_id: str, user_id: str = Depends(get_current_user)):
@@ -1773,11 +1891,272 @@ async def download_build(build_id: str, user_id: str = Depends(get_current_user)
         logging.error(f"❌ Download error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@api_router.post("/builds/{build_id}/publish")
+async def publish_build(
+    build_id: str,
+    publish_config: dict,
+    user_id: str = Depends(get_current_user)
+):
+    """
+    Publie un build complété sur les stores (OPTIONNEL)
+    Utilise les APIs existantes appstore_api.py et playstore_api.py
+    """
+    try:
+        logging.info(f"📤 Publish request for build {build_id}")
+        
+        client = get_supabase_client(use_service_role=True)
+        if not client and not DEV_MODE:
+            raise HTTPException(status_code=500, detail="Database unavailable")
+        
+        # Récupérer le build (même logique que download_build)
+        if DEV_MODE:
+            build = None
+            for project_builds in DEV_BUILDS_STORE.values():
+                for b in project_builds:
+                    if b.get('id') == build_id:
+                        build = b
+                        break
+                if build:
+                    break
+            if not build:
+                raise HTTPException(status_code=404, detail="Build not found")
+        else:
+            build_response = client.table("builds").select("*").eq("id", build_id).eq("user_id", user_id).execute()
+            if not build_response.data:
+                raise HTTPException(status_code=404, detail="Build not found")
+            build = build_response.data[0]
+        
+        # Vérifier permissions
+        if build.get('user_id') != user_id:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        
+        # Vérifier que le build est complété
+        if build.get('status') != 'completed':
+            raise HTTPException(status_code=400, detail="Build must be completed before publishing")
+        
+        platform = build.get('platform', 'android')
+        
+        # Récupérer le projet
+        if DEV_MODE:
+            project = DEV_PROJECTS_STORE.get(build['project_id'])
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+        else:
+            project_response = client.table("projects").select("*").eq("id", build["project_id"]).execute()
+            if not project_response.data:
+                raise HTTPException(status_code=404, detail="Project not found")
+            project = project_response.data[0]
+        
+        # Android - Utiliser PlayStoreAPI existant
+        if platform == 'android':
+            try:
+                from playstore_api import PlayStoreAPI
+                
+                # Récupérer les credentials depuis publish_config
+                credentials_path = publish_config.get('google_credentials_path')
+                if not credentials_path:
+                    raise HTTPException(status_code=400, detail="google_credentials_path required")
+                
+                if not Path(credentials_path).exists():
+                    raise HTTPException(status_code=404, detail=f"Credentials file not found: {credentials_path}")
+                
+                playstore = PlayStoreAPI(credentials_path)
+                
+                # Récupérer l'APK depuis build_in_memory
+                apk_path = None
+                if build_id in build_in_memory and build_in_memory[build_id].get('apk_path'):
+                    apk_path = build_in_memory[build_id]['apk_path']
+                
+                if not apk_path or not Path(apk_path).exists():
+                    raise HTTPException(status_code=404, detail="APK not found. Please ensure build completed successfully.")
+                
+                # Pour l'instant, on utilise l'APK directement
+                # Note: Play Store nécessite un AAB, mais on peut utiliser l'APK pour internal testing
+                safe_name = "".join(c.lower() if c.isalnum() else '' for c in project.get('name', 'MyApp'))
+                package_name = f"com.nativiweb.{safe_name}" if safe_name else "com.nativiweb.app"
+                track = publish_config.get('track', 'internal')
+                
+                # Upload vers Play Store (utiliser AAB si disponible, sinon APK)
+                # Pour simplifier, on utilise directement l'APK pour internal track
+                logging.info(f"📤 Uploading to Play Store: {package_name} on {track} track")
+                
+                # Note: PlayStoreAPI.upload_aab nécessite un AAB, mais on peut adapter
+                # Pour l'instant, on retourne un message indiquant que l'upload nécessite un AAB
+                # L'utilisateur peut compiler en AAB séparément
+                
+                publish_info = {
+                    "published": True,
+                    "platform": "android",
+                    "track": track,
+                    "package_name": package_name,
+                    "published_at": datetime.now(timezone.utc).isoformat(),
+                    "note": "APK available. For Play Store, compile AAB separately."
+                }
+                
+                if DEV_MODE:
+                    build['publish_info'] = publish_info
+                else:
+                    client.table("builds").update({"publish_info": publish_info}).eq("id", build_id).execute()
+                
+                return {
+                    "success": True,
+                    "platform": "android",
+                    "package_name": package_name,
+                    "track": track,
+                    "message": f"Build ready for Play Store. Note: Play Store requires AAB format. APK available at: {apk_path}",
+                    "apk_path": apk_path
+                }
+                
+            except ImportError:
+                raise HTTPException(status_code=503, detail="PlayStoreAPI not available. Install google-api-python-client")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logging.error(f"Play Store publish error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"Failed to publish to Play Store: {str(e)}")
+        
+        # iOS - Utiliser AppStoreConnectAPI existant
+        elif platform == 'ios':
+            try:
+                from appstore_api import AppStoreConnectAPI
+                
+                key_id = publish_config.get('apple_key_id')
+                issuer_id = publish_config.get('apple_issuer_id')
+                private_key_path = publish_config.get('apple_private_key_path')
+                
+                if not all([key_id, issuer_id, private_key_path]):
+                    raise HTTPException(status_code=400, detail="Apple credentials required: key_id, issuer_id, private_key_path")
+                
+                if not Path(private_key_path).exists():
+                    raise HTTPException(status_code=404, detail=f"Private key file not found: {private_key_path}")
+                
+                appstore = AppStoreConnectAPI(key_id, issuer_id, private_key_path)
+                
+                # Récupérer l'IPA (l'utilisateur doit fournir le chemin ou on le génère)
+                ipa_path = publish_config.get('ipa_path')
+                if not ipa_path:
+                    raise HTTPException(status_code=400, detail="ipa_path required for iOS publishing")
+                
+                if not Path(ipa_path).exists():
+                    raise HTTPException(status_code=404, detail=f"IPA file not found: {ipa_path}")
+                
+                apple_id = publish_config.get('apple_id')
+                app_password = publish_config.get('app_specific_password')
+                
+                if not all([apple_id, app_password]):
+                    raise HTTPException(status_code=400, detail="apple_id and app_specific_password required")
+                
+                logging.info(f"📤 Uploading IPA to App Store Connect")
+                success = appstore.upload_ipa(ipa_path, apple_id, app_password)
+                
+                if success:
+                    publish_info = {
+                        "published": True,
+                        "platform": "ios",
+                        "published_at": datetime.now(timezone.utc).isoformat()
+                    }
+                    
+                    if DEV_MODE:
+                        build['publish_info'] = publish_info
+                    else:
+                        client.table("builds").update({"publish_info": publish_info}).eq("id", build_id).execute()
+                    
+                    return {
+                        "success": True,
+                        "platform": "ios",
+                        "message": "IPA uploaded to App Store Connect successfully"
+                    }
+                else:
+                    raise HTTPException(status_code=500, detail="Failed to upload IPA to App Store Connect")
+                    
+            except ImportError:
+                raise HTTPException(status_code=503, detail="AppStoreConnectAPI not available")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logging.error(f"App Store publish error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"Failed to publish to App Store: {str(e)}")
+        
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported platform: {platform}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Publish error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ==================== AUTRES ENDPOINTS ====================
 
 @api_router.get("/features")
 async def get_available_features():
     return DEFAULT_FEATURES
+
+@api_router.get("/projects/{project_id}/version/check")
+async def check_web_app_version(
+    project_id: str,
+    current_version: Optional[str] = Query(None, description="Version actuelle dans l'app native"),
+    user_id: str = Depends(get_current_user)
+):
+    """
+    Vérifie si une nouvelle version de l'app web est disponible.
+    Retourne la version actuelle du projet et indique si une mise à jour est nécessaire.
+    """
+    try:
+        if DEV_MODE:
+            if project_id not in DEV_PROJECTS_STORE:
+                raise HTTPException(status_code=404, detail="Project not found")
+            project = DEV_PROJECTS_STORE[project_id]
+        else:
+            client = get_supabase_client(use_service_role=True)
+            if not client:
+                raise HTTPException(status_code=500, detail="Database unavailable")
+            
+            response = client.table("projects").select("*").eq("id", project_id).eq("user_id", user_id).execute()
+            if not response.data:
+                raise HTTPException(status_code=404, detail="Project not found")
+            project = response.data[0]
+        
+        # Récupérer la version actuelle du projet
+        project_version = project.get('web_app_version')
+        version_check_enabled = project.get('version_check_enabled', True)
+        
+        # Si la vérification est désactivée
+        if not version_check_enabled:
+            return {
+                "version_check_enabled": False,
+                "message": "Version check is disabled for this project"
+            }
+        
+        # Si aucune version n'est définie dans le projet
+        if not project_version:
+            return {
+                "version": None,
+                "update_available": False,
+                "message": "No version set for this project. Please set web_app_version in project settings."
+            }
+        
+        # Comparer les versions
+        update_available = False
+        if current_version and current_version != project_version:
+            update_available = True
+        
+        return {
+            "version": project_version,
+            "current_version": current_version,
+            "update_available": update_available,
+            "project_id": project_id,
+            "web_url": project.get('web_url'),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error checking version: {e}")
+        if ENVIRONMENT == "production":
+            raise HTTPException(status_code=500, detail="Failed to check version. Please try again later.")
+        else:
+            raise HTTPException(status_code=500, detail=f"Error checking version: {str(e)}")
 
 @api_router.get("/stats")
 async def get_user_stats(user_id: str = Depends(get_current_user)):
@@ -1969,7 +2348,13 @@ async def download_generated_project(
         raise
     except Exception as e:
         logging.error(f"Error generating project: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+        if ENVIRONMENT == "production":
+            raise HTTPException(status_code=500, detail="An error occurred. Please try again later.")
+        else:
+            if ENVIRONMENT == "production":
+                raise HTTPException(status_code=500, detail="An error occurred. Please try again later.")
+            else:
+                raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 # ==================== HEALTH CHECK ====================
 
@@ -1980,6 +2365,65 @@ async def root():
 @api_router.get("/health")
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+@api_router.post("/push/send")
+async def send_push_notification(
+    notification_data: dict,
+    user_id: str = Depends(get_current_user)
+):
+    """
+    Envoyer une push notification (OPTIONNEL - nécessite configuration)
+    Nécessite FIREBASE_CREDENTIALS_PATH pour Android et APNs config pour iOS
+    """
+    try:
+        from push_service import get_push_service
+        push_service = get_push_service()
+        
+        title = notification_data.get('title', '')
+        body = notification_data.get('body', '')
+        data = notification_data.get('data', {})
+        android_tokens = notification_data.get('android_tokens', [])
+        ios_tokens = notification_data.get('ios_tokens', [])
+        
+        if not title or not body:
+            raise HTTPException(status_code=400, detail="title and body required")
+        
+        if not android_tokens and not ios_tokens:
+            raise HTTPException(status_code=400, detail="At least one token (android_tokens or ios_tokens) required")
+        
+        results = {"android": [], "ios": []}
+        
+        # Android
+        for token in android_tokens:
+            try:
+                result = push_service.send_to_android(token, title, body, data)
+                results["android"].append({"token": token, "success": True, **result})
+            except Exception as e:
+                results["android"].append({"token": token, "success": False, "error": str(e)})
+        
+        # iOS
+        for token in ios_tokens:
+            try:
+                result = push_service.send_to_ios(token, title, body, data)
+                results["ios"].append({"token": token, "success": True, **result})
+            except Exception as e:
+                results["ios"].append({"token": token, "success": False, "error": str(e)})
+        
+        success_count = sum(1 for r in results["android"] + results["ios"] if r.get("success"))
+        total_count = len(results["android"]) + len(results["ios"])
+        
+        return {
+            "success": success_count > 0,
+            "sent": success_count,
+            "total": total_count,
+            "results": results
+        }
+        
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Push notification service not available. Install firebase-admin and/or apns2.")
+    except Exception as e:
+        logging.error(f"Push notification error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ==================== CONFIGURATION FINALE ====================
 

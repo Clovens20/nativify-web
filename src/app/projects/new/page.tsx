@@ -66,7 +66,12 @@ const availableFeatures = [
   { id: 'contacts', name: 'Contacts', description: 'Accès aux contacts' },
   { id: 'file_system', name: 'Système de fichiers', description: 'Accès aux fichiers' },
   { id: 'deep_links', name: 'Liens profonds', description: 'Deep linking' },
-  { id: 'app_badge', name: 'Badge d\'app', description: 'Badge de notification' }
+  { id: 'app_badge', name: 'Badge d\'app', description: 'Badge de notification' },
+  { id: 'in_app_purchases', name: 'In-App Purchases', description: 'Achats intégrés et abonnements' },
+  { id: 'qr_scanner', name: 'QR/Barcode Scanner', description: 'Scan de codes QR et codes-barres' },
+  { id: 'audio_recording', name: 'Audio Recording', description: 'Enregistrement audio' },
+  { id: 'video_recording', name: 'Video Recording', description: 'Enregistrement vidéo' },
+  { id: 'offline_bundling', name: 'Offline Bundling', description: 'Bundling des assets pour fonctionnement offline' }
 ]
 
 // Type pour les templates
@@ -408,11 +413,8 @@ export default function NewProjectPage() {
         return
       }
 
-      // In development, use relative URL (proxied by Next.js)
-      // In production, use absolute URL from env variable
-      const API_URL = process.env.NODE_ENV === 'production'
-        ? (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000') + '/api'
-        : '/api'
+      // Always use backend URL to avoid proxy timeouts in dev
+      const API_URL = (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000') + '/api'
       const response = await axios.post(
         `${API_URL}/upload/logo`,
         formData,

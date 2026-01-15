@@ -12,6 +12,16 @@ FEATURES_CONFIG = {
         'requires_config': True,
         'category': 'payments'
     },
+    'subscriptions': {
+        'android_permissions': ['com.android.vending.BILLING'],
+        'android_dependencies': [
+            'com.android.billingclient:billing-ktx:6.1.0',
+            'com.android.billingclient:billing:6.1.0'
+        ],
+        'ios_frameworks': ['StoreKit'],
+        'requires_config': True,
+        'category': 'payments'
+    },
     'qr_scanner': {
         'android_permissions': ['android.permission.CAMERA'],
         'android_dependencies': [
@@ -94,6 +104,16 @@ FEATURES_CONFIG = {
         'ios_frameworks': ['LocalAuthentication'],
         'requires_config': False,
         'category': 'security'
+    },
+    'analytics': {
+        'android_permissions': [],
+        'android_dependencies': [
+            'com.google.firebase:firebase-analytics-ktx:21.5.0',
+            'com.google.firebase:firebase-core:21.1.1'
+        ],
+        'ios_frameworks': ['FirebaseAnalytics'],
+        'requires_config': True,
+        'category': 'analytics'
     }
 }
 

@@ -84,11 +84,8 @@ export function useTrackVisit() {
       }
 
       // Envoyer au backend de manière asynchrone (ne pas bloquer)
-      // In development, use relative URL (proxied by Next.js)
-      // In production, use absolute URL from env variable
-      const API_URL = process.env.NODE_ENV === 'production'
-        ? (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000') + '/api'
-        : '/api'
+      // Always use backend URL to avoid proxy timeouts in dev
+      const API_URL = (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000') + '/api'
       fetch(`${API_URL}/track-visit`, {
         method: 'POST',
         headers: {

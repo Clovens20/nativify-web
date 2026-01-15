@@ -28,7 +28,10 @@ import {
   Rocket,
   XCircle,
   AlertCircle,
-  Trash2
+  Trash2,
+  Monitor,
+  Palette,
+  Image as ImageIcon
 } from 'lucide-react'
 import {
   Dialog,
@@ -71,7 +74,7 @@ interface Build {
 }
 
 export default function ProjectDetailPage() {
-  const { user } = useAuth()
+  const { user, session } = useAuth()
   const router = useRouter()
   const params = useParams()
   const projectId = params.id as string
@@ -87,6 +90,26 @@ export default function ProjectDetailPage() {
   const [deleteBuildDialogOpen, setDeleteBuildDialogOpen] = useState(false)
   const [buildToDelete, setBuildToDelete] = useState<Build | null>(null)
   const [deleting, setDeleting] = useState(false)
+  
+  // Advanced configuration states
+  const [orientation, setOrientation] = useState<'portrait' | 'landscape' | 'sensor'>('sensor')
+  const [statusBarStyle, setStatusBarStyle] = useState<'light' | 'dark'>('dark')
+  const [statusBarColor, setStatusBarColor] = useState('#000000')
+  const [generatingScreenshots, setGeneratingScreenshots] = useState(false)
+  
+  // Charger les configs avancées depuis le projet
+  useEffect(() => {
+    if (project && (project as any).advanced_config) {
+      const config = (project as any).advanced_config
+      if (config.orientation) {
+        setOrientation(config.orientation)
+      }
+      if (config.status_bar) {
+        setStatusBarStyle(config.status_bar.style || 'dark')
+        setStatusBarColor(config.status_bar.color || '#000000')
+      }
+    }
+  }, [project])
 
   useEffect(() => {
     const fetchData = async () => {
@@ -277,6 +300,82 @@ export default function ProjectDetailPage() {
     }
   }
 
+  const handleGenerateScreenshots = async (store: 'ios' | 'android' | 'both' = 'both') => {
+    if (!project || !user?.id) return
+    
+    setGeneratingScreenshots(true)
+    try {
+      // Utiliser apiClient pour gérer automatiquement l'authentification
+      // Note: apiClient n'est pas exporté, on doit utiliser fetch avec l'URL correcte
+      const backendBaseUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000'
+      const API_URL = `${backendBaseUrl}/api`
+      
+      const { createClient } = await import('@/lib/supabase')
+      const supabase = createClient()
+      const { data: { session: currentSession } } = await supabase.auth.getSession()
+      
+      if (!currentSession?.access_token) {
+        throw new Error('Not authenticated')
+      }
+      
+      const response = await fetch(
+        `${API_URL}/projects/${projectId}/screenshots/generate?store=${store}&auto_discover=true`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentSession.access_token}`,
+          },
+        }
+      )
+      
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: 'Failed to generate screenshots' }))
+        throw new Error(error.detail || 'Failed to generate screenshots')
+      }
+      
+      // Télécharger le ZIP
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `screenshots_${project.name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.zip`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(url)
+      
+      toast.success('Screenshots générés avec succès!')
+    } catch (error: any) {
+      logger.error('Screenshot generation error', error, { projectId, store })
+      
+      // Gérer les erreurs de manière plus détaillée
+      let errorMessage = 'Erreur lors de la génération des screenshots'
+      
+      if (error.response) {
+        // Erreur de réponse du serveur
+        if (error.response.status === 401) {
+          errorMessage = 'Authentification requise. Veuillez vous reconnecter.'
+        } else if (error.response.status === 404) {
+          errorMessage = 'Projet non trouvé ou accès non autorisé'
+        } else if (error.response.status === 500) {
+          errorMessage = error.response.data?.detail || 'Erreur serveur lors de la génération'
+        } else {
+          errorMessage = error.response.data?.detail || errorMessage
+        }
+      } else if (error.request) {
+        // Pas de réponse du serveur
+        errorMessage = 'Impossible de contacter le serveur. Vérifiez que le backend est démarré.'
+      } else {
+        // Erreur lors de la configuration de la requête
+        errorMessage = error.message || errorMessage
+      }
+      
+      toast.error(errorMessage)
+    } finally {
+      setGeneratingScreenshots(false)
+    }
+  }
+
   if (loading || !project) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -393,6 +492,7 @@ export default function ProjectDetailPage() {
         <TabsList className="bg-background-subtle">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="features">Features</TabsTrigger>
+          <TabsTrigger value="advanced">Advanced</TabsTrigger>
           <TabsTrigger value="builds">Builds</TabsTrigger>
         </TabsList>
 
@@ -536,6 +636,245 @@ export default function ProjectDetailPage() {
           </Card>
         </TabsContent>
 
+        {/* Advanced Configuration Tab */}
+        <TabsContent value="advanced">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Screen Orientation */}
+            <Card className="bg-background-paper border-white/10">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Monitor className="w-5 h-5 text-primary" />
+                  Screen Orientation
+                </CardTitle>
+                <CardDescription>Control how your app handles device rotation</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Orientation Mode</label>
+                  <select
+                    value={orientation}
+                    onChange={(e) => setOrientation(e.target.value as 'portrait' | 'landscape' | 'sensor')}
+                    className="w-full px-3 py-2 bg-background border border-white/10 rounded-md text-foreground"
+                  >
+                    <option value="sensor">Auto (Sensor-based)</option>
+                    <option value="portrait">Portrait Only</option>
+                    <option value="landscape">Landscape Only</option>
+                  </select>
+                  <p className="text-xs text-muted-foreground">
+                    Choose how your app responds to device rotation
+                  </p>
+                </div>
+                <Button
+                  onClick={async () => {
+                    try {
+                      const currentAdvancedConfig = (project as any).advanced_config || {}
+                      await projectsApi.update(projectId, {
+                        advanced_config: {
+                          ...currentAdvancedConfig,
+                          orientation: orientation
+                        }
+                      })
+                      toast.success('Orientation configuration saved')
+                    } catch (error: any) {
+                      logger.error('Failed to save orientation', error)
+                      toast.error(error.response?.data?.detail || 'Failed to save orientation')
+                    }
+                  }}
+                  className="w-full"
+                >
+                  Save Orientation
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Status Bar */}
+            <Card className="bg-background-paper border-white/10">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Palette className="w-5 h-5 text-primary" />
+                  Status Bar
+                </CardTitle>
+                <CardDescription>Customize the status bar appearance</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Status Bar Style</label>
+                  <select
+                    value={statusBarStyle}
+                    onChange={(e) => setStatusBarStyle(e.target.value as 'light' | 'dark')}
+                    className="w-full px-3 py-2 bg-background border border-white/10 rounded-md text-foreground"
+                  >
+                    <option value="dark">Dark (Light icons)</option>
+                    <option value="light">Light (Dark icons)</option>
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Status Bar Color</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="color"
+                      value={statusBarColor}
+                      onChange={(e) => setStatusBarColor(e.target.value)}
+                      className="w-16 h-10 rounded border border-white/10"
+                    />
+                    <input
+                      type="text"
+                      value={statusBarColor}
+                      onChange={(e) => setStatusBarColor(e.target.value)}
+                      className="flex-1 px-3 py-2 bg-background border border-white/10 rounded-md text-foreground"
+                      placeholder="#000000"
+                    />
+                  </div>
+                </div>
+                <Button
+                  onClick={async () => {
+                    try {
+                      const currentAdvancedConfig = (project as any).advanced_config || {}
+                      await projectsApi.update(projectId, {
+                        advanced_config: {
+                          ...currentAdvancedConfig,
+                          status_bar: {
+                            style: statusBarStyle,
+                            color: statusBarColor
+                          }
+                        }
+                      })
+                      toast.success('Status bar configuration saved')
+                    } catch (error: any) {
+                      logger.error('Failed to save status bar', error)
+                      toast.error(error.response?.data?.detail || 'Failed to save status bar')
+                    }
+                  }}
+                  className="w-full"
+                >
+                  Save Status Bar
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Splash Screen */}
+            <Card className="bg-background-paper border-white/10 lg:col-span-2">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <ImageIcon className="w-5 h-5 text-primary" />
+                  Splash Screen
+                </CardTitle>
+                <CardDescription>Configure your app's splash screen</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Splash Screen Image</label>
+                  <div className="border-2 border-dashed border-white/10 rounded-lg p-6 text-center">
+                    <ImageIcon className="w-12 h-12 mx-auto mb-2 text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground mb-2">
+                      Upload a splash screen image (recommended: 1080x1920px)
+                    </p>
+                    <Button variant="outline" size="sm">
+                      Upload Image
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    The splash screen will be displayed when your app launches
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Store Screenshots Generator */}
+            <Card className="bg-background-paper border-white/10 lg:col-span-2">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Rocket className="w-5 h-5 text-primary" />
+                  Store Screenshots Generator
+                </CardTitle>
+                <CardDescription>
+                  Génère automatiquement tous les screenshots requis pour App Store et Play Store
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    Ce générateur va automatiquement :
+                  </p>
+                  <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
+                    <li>Découvrir les pages importantes de votre application</li>
+                    <li>Capturer des screenshots dans toutes les résolutions requises</li>
+                    <li>Générer un ZIP prêt à être uploadé sur les stores</li>
+                  </ul>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <Button
+                    onClick={() => handleGenerateScreenshots('ios')}
+                    disabled={generatingScreenshots}
+                    className="w-full"
+                    variant="outline"
+                  >
+                    {generatingScreenshots ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Apple className="w-4 h-4 mr-2" />
+                    )}
+                    iOS Only
+                  </Button>
+                  
+                  <Button
+                    onClick={() => handleGenerateScreenshots('android')}
+                    disabled={generatingScreenshots}
+                    className="w-full"
+                    variant="outline"
+                  >
+                    {generatingScreenshots ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Smartphone className="w-4 h-4 mr-2" />
+                    )}
+                    Android Only
+                  </Button>
+                  
+                  <Button
+                    onClick={() => handleGenerateScreenshots('both')}
+                    disabled={generatingScreenshots}
+                    className="w-full bg-primary"
+                  >
+                    {generatingScreenshots ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Rocket className="w-4 h-4 mr-2" />
+                    )}
+                    Both Stores
+                  </Button>
+                </div>
+                
+                {generatingScreenshots && (
+                  <div className="p-4 rounded-lg border border-primary/30 bg-primary/5">
+                    <div className="flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                      <p className="text-sm text-muted-foreground">
+                        Génération en cours... Cela peut prendre quelques minutes.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="p-4 rounded-lg border border-info/20 bg-info/5">
+                  <p className="text-xs text-muted-foreground">
+                    <strong>Note:</strong> Les screenshots seront générés dans les résolutions exactes requises :
+                  </p>
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                    <div>
+                      <strong>iOS:</strong> iPhone 6.7", 6.5", 5.5", iPad Pro 12.9", 11", 10.5"
+                    </div>
+                    <div>
+                      <strong>Android:</strong> Phone, 7" Tablet, 10" Tablet, TV, Wear
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
         {/* Builds Tab */}
         <TabsContent value="builds">
           <Card className="bg-background-paper border-white/10">
@@ -617,7 +956,7 @@ export default function ProjectDetailPage() {
                                     ? 'hover:bg-success/10 hover:border-success/30' 
                                     : 'hover:bg-info/10 hover:border-info/30'
                                 }`}
-                                onClick={() => download(build.id)}
+                                onClick={() => download(build.id, build.platform)}
                                 disabled={isDownloading}
                               >
                                 {isDownloading ? (

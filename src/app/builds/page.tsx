@@ -12,6 +12,7 @@ import { buildsApi, projectsApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { logger } from '@/lib/logger'
 import { useDownload } from '@/hooks/useDownload'
+import { DependenciesChecker } from '@/components/system/DependenciesChecker'
 import { 
   Smartphone, 
   Apple, 
@@ -224,6 +225,11 @@ export default function BuildsPage() {
 
   return (
     <DashboardLayout title="Builds" subtitle="View all your build history">
+      {/* Vérification des dépendances système */}
+      <div className="mb-6">
+        <DependenciesChecker />
+      </div>
+
       {/* Dialog de confirmation de suppression d'un build */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent className="bg-background-paper border-white/10">
@@ -416,7 +422,7 @@ export default function BuildsPage() {
                                     ? 'hover:bg-success/10 hover:border-success/30' 
                                     : 'hover:bg-info/10 hover:border-info/30'
                                 }`}
-                                onClick={() => download(build.id)}
+                                onClick={() => download(build.id, build.platform)}
                                 disabled={isDownloading}
                               >
                                 {isDownloading ? (

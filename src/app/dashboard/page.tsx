@@ -61,15 +61,45 @@ export default function DashboardPage() {
     if (!user?.id) return
     try {
       const [statsData, projectsData, buildsData] = await Promise.all([
-        statsApi.get(),
+        statsApi.get().catch(() => null), // Ne pas échouer si stats échoue
         projectsApi.getAll(),
         buildsApi.getAll()
       ])
-      setStats(statsData)
+      
+      // Calculer les stats depuis les données récupérées si l'API stats ne fonctionne pas
+      const calculatedStats = statsData || {
+        projects: projectsData.length,
+        total_builds: buildsData.length,
+        successful_builds: buildsData.filter((b: Build) => b.status === 'completed').length,
+        api_keys: statsData?.api_keys || 0 // Garder api_keys de l'API si disponible
+      }
+      
+      // Si l'API stats retourne 0 mais qu'on a des projets, utiliser les stats calculées
+      if (statsData && statsData.projects === 0 && projectsData.length > 0) {
+        setStats(calculatedStats)
+      } else {
+        setStats(statsData || calculatedStats)
+      }
+      
       setProjects(projectsData.slice(0, 3))
       setRecentBuilds(buildsData.slice(0, 5))
     } catch (error) {
       logger.error('Failed to fetch dashboard data', error, { userId: user?.id })
+      // En cas d'erreur, essayer de récupérer au moins les projets
+      try {
+        const projectsData = await projectsApi.getAll()
+        const buildsData = await buildsApi.getAll().catch(() => [])
+        setStats({
+          projects: projectsData.length,
+          total_builds: buildsData.length,
+          successful_builds: buildsData.filter((b: Build) => b.status === 'completed').length,
+          api_keys: 0
+        })
+        setProjects(projectsData.slice(0, 3))
+        setRecentBuilds(buildsData.slice(0, 5))
+      } catch (fallbackError) {
+        logger.error('Failed to fetch fallback data', fallbackError)
+      }
     } finally {
       setLoading(false)
     }

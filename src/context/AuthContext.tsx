@@ -6,11 +6,8 @@ import { User, Session } from '@supabase/supabase-js'
 import axios from 'axios'
 import { logger } from '@/lib/logger'
 
-// In development, use relative URL (proxied by Next.js)
-// In production, use absolute URL from env variable
-const API_URL = process.env.NODE_ENV === 'production'
-  ? (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000') + '/api'
-  : '/api'
+// Always use backend URL to avoid proxy timeouts in dev
+const API_URL = (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000') + '/api'
 
 interface UserProfile {
   id: string
@@ -300,8 +297,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       } else if (error.request) {
         // Request made but no response (backend not running or CORS issue)
         const backendUrl = typeof window !== 'undefined' && process.env.NODE_ENV === 'production'
-          ? (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000')
-          : 'http://localhost:8000'
+          ? (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000')
+          : 'http://127.0.0.1:8000'
         throw new Error('Cannot connect to server. Please make sure the backend is running on ' + backendUrl)
       } else {
         // Error setting up request

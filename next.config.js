@@ -116,6 +116,24 @@ const nextConfig = {
           {
             key: 'Permissions-Policy',
             value: 'camera=(), microphone=(), geolocation=()'
+          },
+          {
+            key: 'Content-Security-Policy',
+            value: [
+              "default-src 'self'",
+              "script-src 'self' 'unsafe-inline' 'unsafe-eval'", // unsafe-eval nécessaire pour Next.js dev
+              "style-src 'self' 'unsafe-inline'", // unsafe-inline pour Tailwind
+              "img-src 'self' data: https: blob:",
+              "font-src 'self' data:",
+              "connect-src 'self' https: wss: http://localhost:8000 http://127.0.0.1:8000", // Pour API et WebSocket
+              "frame-ancestors 'none'",
+              "base-uri 'self'",
+              "form-action 'self'",
+              "frame-src 'self'",
+              "media-src 'self' blob:",
+              "object-src 'none'",
+              "upgrade-insecure-requests"
+            ].join('; ')
           }
         ],
       },
