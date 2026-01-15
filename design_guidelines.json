@@ -1,0 +1,142 @@
+{
+  "identity": {
+    "name": "NativiWeb Studio",
+    "persona": "The Architect of the Void",
+    "tone": "Professional, High-Tech, Efficient, Futuristic",
+    "aesthetic": "Neon Tech / Cyber-Industrial",
+    "description": "A platform that feels like the cockpit of a spaceship. Dark, precise, and illuminated by critical data."
+  },
+  "typography": {
+    "primary_font": "Outfit",
+    "secondary_font": "JetBrains Mono",
+    "body_font": "Manrope",
+    "weights": {
+      "light": 300,
+      "regular": 400,
+      "medium": 500,
+      "bold": 700,
+      "black": 900
+    },
+    "usage": {
+      "headings": "Outfit (Bold/Black) - Tight tracking (-0.02em)",
+      "body": "Manrope (Regular) - Relaxed leading",
+      "code": "JetBrains Mono (Medium) - For API keys, logs, and technical specs"
+    }
+  },
+  "colors": {
+    "palette": {
+      "background": {
+        "default": "#050505",
+        "paper": "#0A0A0F",
+        "subtle": "#12121A"
+      },
+      "primary": {
+        "main": "#00F0FF",
+        "hover": "#00C2CC",
+        "glow": "rgba(0, 240, 255, 0.5)"
+      },
+      "secondary": {
+        "main": "#7000FF",
+        "hover": "#5A00CC",
+        "glow": "rgba(112, 0, 255, 0.5)"
+      },
+      "text": {
+        "primary": "#EDEDED",
+        "secondary": "#A1A1AA",
+        "muted": "#52525B"
+      },
+      "status": {
+        "success": "#00FF94",
+        "error": "#FF0055",
+        "warning": "#FFD600",
+        "info": "#00F0FF"
+      }
+    },
+    "gradients": {
+      "hero": "linear-gradient(135deg, #050505 0%, #0A0A0F 100%)",
+      "neon_border": "linear-gradient(90deg, transparent, #00F0FF, transparent)",
+      "glass": "linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.01) 100%)"
+    }
+  },
+  "visual_enhancers": {
+    "borders": "1px solid rgba(255, 255, 255, 0.08)",
+    "radius": {
+      "sm": "2px",
+      "md": "4px",
+      "lg": "8px",
+      "xl": "12px"
+    },
+    "shadows": {
+      "neon": "0 0 20px -5px var(--primary-glow)",
+      "glass": "0 8px 32px 0 rgba(0, 0, 0, 0.36)"
+    },
+    "textures": {
+      "grid": "radial-gradient(circle, rgba(255,255,255,0.1) 1px, transparent 1px)",
+      "noise": "url('/assets/noise.png')"
+    }
+  },
+  "layout_strategy": {
+    "landing_page": {
+      "grid": "Tetris Grid (Mode A)",
+      "spacing": "Generous (gap-8 to gap-12)",
+      "container": "max-w-7xl mx-auto px-6"
+    },
+    "dashboard": {
+      "grid": "Control Room Grid (Mode B)",
+      "spacing": "Tight (gap-4)",
+      "container": "w-full h-screen overflow-hidden flex"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-primary text-black font-bold hover:shadow-[0_0_20px_rgba(0,240,255,0.4)] transition-all duration-300 rounded-sm uppercase tracking-wider",
+      "secondary": "border border-white/20 text-white hover:bg-white/5 hover:border-primary/50 transition-all rounded-sm"
+    },
+    "cards": {
+      "style": "bg-black/40 backdrop-blur-xl border border-white/10 hover:border-primary/30 transition-colors duration-300",
+      "interaction": "Group hover effects for inner elements"
+    },
+    "inputs": {
+      "style": "bg-white/5 border-white/10 focus:border-primary focus:ring-1 focus:ring-primary/50 rounded-sm text-white placeholder:text-white/20"
+    }
+  },
+  "image_urls": {
+    "hero_background": {
+      "url": "https://images.unsplash.com/photo-1762279388979-6a430989284c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMG5lb24lMjB0ZWNobm9sb2d5JTIwbmV0d29ya3xlbnwwfHx8fDE3Njc2NjEyMTF8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Abstract glowing neon lines for hero section background",
+      "category": "background"
+    },
+    "feature_native": {
+      "url": "https://images.unsplash.com/photo-1759588071836-fcfca86e43de?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzd8MHwxfHNlYXJjaHwyfHxzbWFydHBob25lJTIwdGVjaG5vbG9neSUyMGRhcmslMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc2NzY2MTIxNXww&ixlib=rb-4.1.0&q=85",
+      "description": "Close up of smartphone camera lens, representing native hardware access",
+      "category": "feature"
+    },
+    "developer_experience": {
+      "url": "https://images.unsplash.com/photo-1719400471588-575b23e27bd7?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwxfHxkZXZlbG9wZXIlMjBjb2RpbmclMjBkYXJrJTIwcm9vbXxlbnwwfHx8fDE3Njc2NjEyMTJ8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Developer working in dark room with multiple screens",
+      "category": "about"
+    },
+    "abstract_texture": {
+      "url": "https://images.unsplash.com/photo-1762279389006-43963a0cee55?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHw0fHxhYnN0cmFjdCUyMG5lb24lMjB0ZWNobm9sb2d5JTIwbmV0d29ya3xlbnwwfHx8fDE3Njc2NjEyMTF8MA&ixlib=rb-4.1.0&q=85",
+      "description": "Neon lines on dark background for section dividers or cards",
+      "category": "texture"
+    }
+  },
+  "instructions_to_main_agent": [
+    "1. SETUP: Install 'lucide-react' and 'framer-motion' immediately.",
+    "2. THEME: Override tailwind.config.js colors with the 'colors' object defined above. Do not use default shadcn colors.",
+    "3. FONTS: Import 'Outfit', 'Manrope', and 'JetBrains Mono' from Google Fonts in index.css.",
+    "4. LAYOUT: For the Dashboard, use a fixed sidebar (w-64) and a scrollable main content area. Use the 'Control Room' grid logic.",
+    "5. LANDING: Implement a 'Hero' section with the 'hero_background' image as a dark overlay (opacity-20). Use massive typography.",
+    "6. COMPONENTS: Customize Shadcn components to remove rounded-xl (use rounded-sm or rounded-md) and remove white backgrounds. Everything must be dark.",
+    "7. GLASSMORPHISM: Use the 'glass' gradient and 'backdrop-blur-xl' for the Sidebar and Top Navigation.",
+    "8. DATA-TESTID: Ensure every button and input has a data-testid attribute."
+  ],
+  "universal_guidelines": [
+    "Do not use gradients for text unless it's a very large heading.",
+    "Avoid 'Inter' font. Use 'Outfit' for headings.",
+    "Use 2x more padding than you think is necessary.",
+    "Never use pure black (#000000) for backgrounds, use #050505.",
+    "Always add hover states to interactive elements."
+  ]
+}

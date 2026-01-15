@@ -1,0 +1,5 @@
+# Gradle Wrapper JAR
+# Ce fichier sera remplacé automatiquement par Gradle lors de la première compilation.
+# Le JAR sera téléchargé depuis: https://services.gradle.org/distributions/gradle-8.2-bin.zip
+# Si le JAR n'est pas automatiquement téléchargé, vous pouvez le télécharger manuellement depuis:
+# https://raw.githubusercontent.com/gradle/gradle/v8.2.0/gradle/wrapper/gradle-wrapper.jar
