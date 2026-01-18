@@ -3057,6 +3057,51 @@ async def check_system_dependencies(user_id: str = Depends(get_current_user)):
     
     return result
 
+
+@api_router.get("/system-info")
+async def system_info():
+    """Return system information including Java installation"""
+    try:
+        import subprocess
+
+        java_version = None
+        java_home = os.environ.get("JAVA_HOME", "Not set")
+        java_installed = False
+
+        try:
+            # Essayer de récupérer la version de Java
+            result = subprocess.run(
+                ["java", "-version"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                java_installed = True
+                version_output = result.stderr or result.stdout
+                java_version = version_output.split('\n')[0] if version_output else None
+        except FileNotFoundError:
+            java_installed = False
+            java_version = "Java not found in PATH"
+        except Exception as e:
+            logging.warning(f"Error checking Java: {e}")
+            java_version = f"Error: {str(e)}"
+
+        return {
+            "java_installed": java_installed,
+            "java_version": java_version,
+            "java_home": java_home,
+            "platform": platform.system(),
+            "python_version": sys.version,
+            "environment": ENVIRONMENT
+        }
+    except Exception as e:
+        logging.error(f"System info error: {e}")
+        return {
+            "java_installed": False,
+            "error": str(e)
+        }
+
 # ==================== GENERATOR ====================
 
 try:
