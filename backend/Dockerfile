@@ -4,18 +4,18 @@ FROM python:3.12-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies (including Java 17 for Android build dependencies)
+# Install system dependencies (including Java 21 for Android build dependencies)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     gcc \
-    openjdk-17-jdk \
+    openjdk-21-jdk \
     curl \
     ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Java environment variables
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 ENV PATH="$JAVA_HOME/bin:$PATH"
 
 # Copy requirements and install Python dependencies
