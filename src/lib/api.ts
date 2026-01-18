@@ -26,6 +26,9 @@ apiClient.interceptors.request.use(
       }
       
       if (session?.access_token) {
+        if (!config.headers) {
+          config.headers = {} as any;
+        }
         config.headers.Authorization = `Bearer ${session.access_token}`;
       } else {
         logger.debug('[API] No access token found in session', { url: config.url });

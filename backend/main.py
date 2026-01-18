@@ -641,6 +641,15 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                     logging.debug(f"Token signature verified for user: {user_id}")
                 except Exception as sig_error:
                     logging.warning(f"Token signature verification failed: {sig_error}")
+                    # Fallback: vérifier via Supabase si la récupération JWKS échoue
+                    try:
+                        if supabase:
+                            user_response = supabase.auth.get_user(token)
+                            if user_response.user and user_response.user.id == user_id:
+                                logging.info("Token validated via Supabase fallback")
+                                return user_id
+                    except Exception as fallback_error:
+                        logging.error(f"Supabase fallback verification failed: {fallback_error}")
                     raise HTTPException(status_code=401, detail="Invalid token signature")
             else:
                 # En développement, vérifier si disponible, sinon warning seulement
