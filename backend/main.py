@@ -2983,6 +2983,8 @@ async def admin_get_visit_stats(admin_user: Dict[str, Any] = Depends(get_admin_u
 @api_router.get("/system/check-dependencies")
 async def check_system_dependencies(user_id: str = Depends(get_current_user)):
     """Check system dependencies for Android build"""
+    import subprocess
+    
     result = {
         "android_builder_available": False,
         "java_available": False,
@@ -2999,108 +3001,73 @@ async def check_system_dependencies(user_id: str = Depends(get_current_user)):
     }
     
     try:
-        from android_builder import AndroidBuilder
-        builder = AndroidBuilder()
+        # Vérifier Java sur le SERVEUR
+        java_home = os.environ.get("JAVA_HOME")
+        result["java_home"] = java_home
         
-        result["android_builder_available"] = True
-        
-        if builder.java_home:
-            result["java_available"] = True
-            result["java_home"] = builder.java_home
-            
-            try:
-                import subprocess
-                java_exe = Path(builder.java_home) / 'bin' / ('java.exe' if os.name == 'nt' else 'java')
-                if java_exe.exists():
-                    version_result = subprocess.run(
-                        [str(java_exe), '-version'],
-                        capture_output=True,
-                        text=True,
-                        timeout=5
-                    )
-                    if version_result.returncode == 0:
-                        version_line = (version_result.stderr or version_result.stdout).split('\n')[0]
-                        result["java_version"] = version_line
-            except Exception:
-                pass
-        else:
-            result["errors"].append("Java JDK non trouvé")
-            result["instructions"].extend([
-                "Installez Java JDK 17+ depuis https://adoptium.net/",
-                "Ajoutez Java au PATH système",
-                "Redémarrez le serveur"
-            ])
-        
-        if builder.android_home and Path(builder.android_home).exists():
-            result["android_sdk_available"] = True
-            result["android_home"] = builder.android_home
-        else:
-            result["warnings"].append("Android SDK non trouvé (optionnel)")
-        
-        deps_ok, deps_error = builder.check_dependencies()
-        
-        if deps_ok:
-            result["status"] = "ready"
-            result["ready"] = True
-        else:
-            result["status"] = "missing_dependencies"
-            result["ready"] = False
-            if deps_error:
-                result["errors"].append(deps_error)
-                
-    except ImportError:
-        result["errors"].append("AndroidBuilder non disponible")
-        result["status"] = "builder_unavailable"
-    except Exception as e:
-        result["errors"].append(f"Erreur: {str(e)}")
-        result["status"] = "error"
-    
-    return result
-
-
-@api_router.get("/system-info")
-async def system_info():
-    """Return system information including Java installation"""
-    try:
-        import subprocess
-
-        java_version = None
-        java_home = os.environ.get("JAVA_HOME", "Not set")
-        java_installed = False
-
         try:
-            # Essayer de récupérer la version de Java
-            result = subprocess.run(
+            # Essayer d'exécuter java -version sur le serveur
+            java_result = subprocess.run(
                 ["java", "-version"],
                 capture_output=True,
                 text=True,
                 timeout=5
             )
-            if result.returncode == 0:
-                java_installed = True
-                version_output = result.stderr or result.stdout
-                java_version = version_output.split('\n')[0] if version_output else None
+            
+            if java_result.returncode == 0:
+                result["java_available"] = True
+                version_output = java_result.stderr or java_result.stdout
+                result["java_version"] = version_output.split('\n')[0] if version_output else None
+                logging.info(f"✅ Java détecté sur le serveur: {result['java_version']}")
+            else:
+                result["errors"].append("Java JDK 17+ non trouvé sur le serveur")
         except FileNotFoundError:
-            java_installed = False
-            java_version = "Java not found in PATH"
+            result["errors"].append("Java JDK 17+ non trouvé. Installez Java JDK 17 ou supérieur et définissez JAVA_HOME.")
+            result["instructions"].extend([
+                "Installez Java JDK 17+ depuis https://adoptium.net/",
+                "Ajoutez Java au PATH système",
+                "Redémarrez le serveur"
+            ])
         except Exception as e:
-            logging.warning(f"Error checking Java: {e}")
-            java_version = f"Error: {str(e)}"
-
-        return {
-            "java_installed": java_installed,
-            "java_version": java_version,
-            "java_home": java_home,
-            "platform": platform.system(),
-            "python_version": sys.version,
-            "environment": ENVIRONMENT
-        }
+            logging.error(f"Erreur vérification Java: {e}")
+            result["errors"].append(f"Erreur lors de la vérification de Java: {str(e)}")
+        
+        # Vérifier AndroidBuilder
+        try:
+            from android_builder import AndroidBuilder
+            builder = AndroidBuilder()
+            result["android_builder_available"] = True
+            
+            # Vérifier Android SDK (optionnel)
+            if builder.android_home and Path(builder.android_home).exists():
+                result["android_sdk_available"] = True
+                result["android_home"] = builder.android_home
+            else:
+                result["warnings"].append("Android SDK non trouvé (optionnel)")
+            
+            # Vérifier si tout est prêt
+            if result["java_available"]:
+                result["status"] = "ready"
+                result["ready"] = True
+                logging.info("✅ Système prêt pour la compilation Android")
+            else:
+                result["status"] = "missing_dependencies"
+                result["ready"] = False
+                
+        except ImportError:
+            result["errors"].append("AndroidBuilder non disponible")
+            result["status"] = "builder_unavailable"
+        except Exception as builder_error:
+            logging.error(f"Erreur AndroidBuilder: {builder_error}")
+            result["errors"].append(f"Erreur AndroidBuilder: {str(builder_error)}")
+            result["status"] = "error"
+                
     except Exception as e:
-        logging.error(f"System info error: {e}")
-        return {
-            "java_installed": False,
-            "error": str(e)
-        }
+        result["errors"].append(f"Erreur: {str(e)}")
+        result["status"] = "error"
+        logging.error(f"Erreur système: {e}", exc_info=True)
+    
+    return result
 
 # ==================== GENERATOR ====================
 
