@@ -73,6 +73,11 @@ interface Build {
   duration_seconds: number | null
 }
 
+interface DependenciesStatus {
+  ready: boolean
+  errors: string[]
+}
+
 export default function ProjectDetailPage() {
   const { user, session } = useAuth()
   const router = useRouter()
@@ -242,8 +247,49 @@ export default function ProjectDetailPage() {
     }
   }
 
+  const ensureAndroidDependencies = async (): Promise<boolean> => {
+    try {
+      if (!session?.access_token) {
+        toast.error('Authentification requise pour vérifier les dépendances')
+        return false
+      }
+      
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000'
+      const response = await fetch(`${backendUrl}/api/system/check-dependencies`, {
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      })
+      
+      if (!response.ok) {
+        throw new Error('Erreur lors de la vérification des dépendances')
+      }
+      
+      const data: DependenciesStatus = await response.json()
+      if (!data.ready) {
+        const firstError = data.errors?.[0]
+        const message = firstError
+          ? `Dépendances Android manquantes: ${firstError}`
+          : 'Dépendances Android manquantes. Consultez la page Builds pour les instructions.'
+        toast.error(message)
+        return false
+      }
+      
+      return true
+    } catch (error) {
+      logger.error('Failed to check Android dependencies before build', error)
+      toast.error('Impossible de vérifier les dépendances Android')
+      return false
+    }
+  }
+
   const handleStartBuild = async (platform: string) => {
     if (!user?.id || !project) return
+    
+    if (platform === 'android') {
+      const canBuild = await ensureAndroidDependencies()
+      if (!canBuild) return
+    }
     
     setBuildingPlatform(platform)
     try {

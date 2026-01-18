@@ -43,8 +43,16 @@ export default function AdminLoginPage() {
         router.push('/admin/login?error=not_admin')
       }
     } catch (error: any) {
-      const errorMessage = error.response?.data?.detail || error.message || 'Échec de la connexion'
-      toast.error(errorMessage)
+      if (error.message?.includes('backend n\'est pas disponible') || error.isConnectionError || error.code === 'ECONNREFUSED') {
+        toast.error('Le serveur backend n\'est pas disponible. Veuillez démarrer le serveur avec: npm run dev', {
+          duration: 8000
+        })
+      } else if (error.response?.status === 401) {
+        toast.error('Email ou mot de passe incorrect')
+      } else {
+        const errorMessage = error.response?.data?.detail || error.message || 'Échec de la connexion'
+        toast.error(errorMessage)
+      }
       router.push(`/admin/login?error=auth_failed`)
     } finally {
       setLoading(false)

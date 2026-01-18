@@ -38,6 +38,9 @@ export default function LoginPage() {
         toast.error('Le serveur backend n\'est pas disponible. Veuillez démarrer le serveur avec: npm run dev', {
           duration: 8000
         })
+      } else if (error.response?.status === 401) {
+        // Message clair pour les identifiants invalides
+        toast.error('Email ou mot de passe incorrect')
       } else {
         toast.error(error.message || error.response?.data?.detail || 'Login failed')
       }
