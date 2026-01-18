@@ -1,3 +1,17 @@
+FROM python:3.12-slim
+
+# Install Java 17 for Android build dependencies
+RUN apt-get update && apt-get install -y openjdk-17-jdk && rm -rf /var/lib/apt/lists/*
+
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV PATH="$JAVA_HOME/bin:$PATH"
+
+WORKDIR /app
+COPY . .
+
+RUN pip install -r requirements.txt
+
+CMD ["python", "start.py"]
 # Dockerfile pour Backend (FastAPI)
 FROM python:3.11-slim
 
