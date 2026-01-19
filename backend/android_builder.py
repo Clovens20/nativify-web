@@ -329,8 +329,11 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
 class AndroidBuilder:
     """Classe pour compiler des projets Android et générer des APKs fonctionnels"""
     
-    def __init__(self, project_root: Optional[Path] = None):
-        # Configurer Java automatiquement AVANT tout
+    def __init__(self, project_root: Path):
+        """Initialise le builder Android"""
+        
+        # ÉTAPE 1: Auto-détecter Java AVANT tout
+        logger.info("🔍 Détection de Java...")
         _setup_java_environment()
         
         env_path = Path(__file__).parent / '.env'
@@ -343,24 +346,35 @@ class AndroidBuilder:
                 load_dotenv(root_env)
                 logger.info(f"🔍 .env chargé depuis: {root_env}")
         
+        # ÉTAPE 2: Récupérer les variables
         self.project_root = project_root
         self.java_home = os.environ.get('JAVA_HOME', '')
+        self.android_home = os.environ.get('ANDROID_HOME', 'C:\\Android')
         
-        # Auto-détection Android SDK
-        android_home = (
-            os.environ.get('ANDROID_HOME') or 
-            os.environ.get('ANDROID_SDK_ROOT') or
-            'C:\\Android'
-        )
-        if not android_home or (os.name != 'nt' and android_home.startswith('C:\\')):
-            android_home = self._find_android_sdk()
-        
-        self.android_home = android_home
-        
+        # ÉTAPE 3: Logs de debug
         logger.info(f"🔍 AndroidBuilder init - JAVA_HOME: {self.java_home}")
         logger.info(f"🔍 AndroidBuilder init - ANDROID_HOME: {self.android_home}")
         
-        self.check_dependencies()
+        # ÉTAPE 4: CRITIQUE - Vérifier que JAVA_HOME existe
+        if not self.java_home:
+            logger.error("❌ JAVA_HOME est vide après auto-détection!")
+            raise ValueError("JAVA_HOME non trouvé. Java JDK 17+ requis.")
+        
+        if not os.path.exists(self.java_home):
+            logger.error(f"❌ JAVA_HOME pointe vers un chemin inexistant: {self.java_home}")
+            raise ValueError(f"JAVA_HOME invalide: {self.java_home}")
+        
+        # Vérifier que java existe
+        java_exe = os.path.join(self.java_home, 'bin', 'java.exe' if os.name == 'nt' else 'java')
+        if not os.path.exists(java_exe):
+            logger.error(f"❌ Exécutable Java non trouvé: {java_exe}")
+            raise ValueError(f"Java non trouvé dans JAVA_HOME: {self.java_home}")
+        
+        logger.info(f"✅ Java trouvé: {java_exe}")
+        
+        # Reste de l'initialisation...
+        self.android_dir = None
+        self.build_config = None
 
     def _create_local_properties(self) -> None:
         """Crée le fichier local.properties avec le SDK Android si disponible"""
@@ -435,20 +449,24 @@ android.nonFinalResIds=false
         """Lance la compilation Gradle"""
         logger.info("🔨 Lancement de la compilation...")
         
-        # Déterminer le wrapper Gradle
-        if os.name == 'nt':  # Windows
+        # CRITIQUE: Vérifier que JAVA_HOME existe
+        if not self.java_home:
+            raise ValueError("JAVA_HOME n'est pas défini. Impossible de compiler.")
+        
+        # Wrapper Gradle
+        if os.name == 'nt':
             gradlew = self.android_dir / "gradlew.bat"
-        else:  # Linux/Mac
+        else:
             gradlew = self.android_dir / "gradlew"
         
         if not gradlew.exists():
             raise FileNotFoundError(f"Gradle wrapper non trouvé: {gradlew}")
         
-        # Donner les permissions d'exécution (Linux/Mac uniquement)
+        # Permissions (Linux/Mac)
         if os.name != 'nt':
             os.chmod(gradlew, 0o755)
         
-        # Commande de compilation - SANS --no-daemon sur Linux pour éviter les problèmes JVM
+        # Commande
         cmd = [
             str(gradlew),
             "assembleDebug",
@@ -456,29 +474,35 @@ android.nonFinalResIds=false
             "--warning-mode", "all",
         ]
         
-        # Ajouter --no-build-cache seulement si on a assez de mémoire
-        if os.name != 'nt':  # Sur serveur Linux, éviter le cache
+        if os.name != 'nt':
             cmd.append("--no-build-cache")
         
         logger.info(f"💻 Commande: {' '.join(cmd)}")
         
-        # Variables d'environnement pour Gradle
+        # Variables d'environnement - VÉRIFICATION CRITIQUE
         env = os.environ.copy()
-        env['JAVA_HOME'] = self.java_home
-        env['ANDROID_HOME'] = self.android_home
         
-        # Options JVM pour Gradle (via variable d'environnement)
+        # S'assurer que JAVA_HOME est une chaîne valide
+        java_home = str(self.java_home) if self.java_home else ''
+        if not java_home or not os.path.exists(java_home):
+            raise ValueError(f"JAVA_HOME invalide ou inexistant: {java_home}")
+        
+        env['JAVA_HOME'] = java_home
+        env['ANDROID_HOME'] = str(self.android_home) if self.android_home else ''
         env['GRADLE_OPTS'] = '-Xmx2048m -Dfile.encoding=UTF-8 -Dorg.gradle.daemon=false'
+        
+        logger.info(f"🔧 JAVA_HOME utilisé: {env['JAVA_HOME']}")
+        logger.info(f"🔧 ANDROID_HOME utilisé: {env['ANDROID_HOME']}")
         
         start_time = time.time()
         
         try:
             result = subprocess.run(
                 cmd,
-                cwd=self.android_dir,
+                cwd=str(self.android_dir),
                 capture_output=True,
                 text=True,
-                timeout=600,  # 10 minutes max
+                timeout=600,
                 env=env,
                 check=False
             )
@@ -486,31 +510,20 @@ android.nonFinalResIds=false
             build_time = time.time() - start_time
             logger.info(f"⏱️ Temps de compilation: {build_time:.1f}s")
             
-            # Sauvegarder les logs
+            # Logs
             log_file = self.android_dir / "gradle_build.log"
             full_output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
             log_file.write_text(full_output, encoding='utf-8')
             
-            logger.error(f"📋 Log complet ({len(full_output)} chars) sauvegardé dans: {log_file}")
+            logger.info(f"📋 Log complet ({len(full_output)} chars) sauvegardé dans: {log_file}")
             
             if result.returncode != 0:
                 error_msg = self._parse_gradle_error(result.stdout, result.stderr)
                 raise Exception(f"❌ Compilation échouée:\n{error_msg}")
             
-            # Vérifier que l'APK existe
-            apk_candidates = [
-                self.android_dir / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk",
-                self.android_dir / "build" / "outputs" / "apk" / "debug" / "app-debug.apk",
-            ]
-            apk_path = next((p for p in apk_candidates if p.exists()), None)
-            
-            if not apk_path:
-                for apk_file in self.android_dir.rglob('*.apk'):
-                    if 'debug' in str(apk_file).lower() and 'unsigned' not in str(apk_file).lower():
-                        apk_path = apk_file
-                        break
-            
-            if not apk_path or not apk_path.exists():
+            # Vérifier APK
+            apk_path = self.android_dir / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+            if not apk_path.exists():
                 raise FileNotFoundError(f"APK non trouvé: {apk_path}")
             
             logger.info(f"✅ Compilation réussie: {apk_path}")

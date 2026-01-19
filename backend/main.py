@@ -1436,7 +1436,7 @@ async def process_build(build_id: str, project: dict):
                     
                     try:
                         from android_builder import AndroidBuilder
-                        builder = AndroidBuilder()
+                        builder = AndroidBuilder(Path(__file__).parent)
                         
                         import concurrent.futures
                         loop = asyncio.get_event_loop()
@@ -1552,7 +1552,7 @@ async def process_build(build_id: str, project: dict):
                     
                     try:
                         from android_builder import AndroidBuilder
-                        builder = AndroidBuilder()
+                        builder = AndroidBuilder(Path(__file__).parent)
                         
                         import concurrent.futures
                         loop = asyncio.get_event_loop()
@@ -1838,7 +1838,7 @@ async def download_build(build_id: str, user_id: str = Depends(get_current_user)
             
             try:
                 from android_builder import AndroidBuilder
-                builder = AndroidBuilder()
+                builder = AndroidBuilder(Path(__file__).parent)
                 
                 # Vérifier dépendances
                 deps_ok, deps_error = builder.check_dependencies()
@@ -3057,7 +3057,7 @@ async def check_system_dependencies(user_id: str = Depends(get_current_user)):
         # Vérifier AndroidBuilder
         try:
             from android_builder import AndroidBuilder
-            builder = AndroidBuilder()
+            builder = AndroidBuilder(Path(__file__).parent)
             result["android_builder_available"] = True
             
             # Vérifier Android SDK (optionnel)
