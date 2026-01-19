@@ -129,7 +129,7 @@ if SENTRY_DSN and ENVIRONMENT == 'production':
     except ImportError:
         logging.warning("Sentry SDK not installed - error tracking disabled")
 
-ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
+ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'https://nativify-web-vercel.vercel.app,http://localhost:3000').split(',')
 
 # Supabase connection
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
