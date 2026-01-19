@@ -1402,7 +1402,9 @@ async def create_build(
         DEV_BUILDS_STORE[build_data.project_id].append(build)
         
         # CORRECTION: Passer les vraies données du projet
-        background_tasks.add_task(process_build, build_id, project)
+        logging.info(f"🎯 Adding background task for build {build_id}")
+        background_tasks.add_task(process_build_with_timeout, build_id, project, 15)
+        logging.info(f"✅ Background task added for build {build_id}")
         logging.info(f"🔨 Build créé en mode DEV: {build_id}")
         return build
     
@@ -1446,7 +1448,9 @@ async def create_build(
         
         await log_system_event("info", "build", f"Build started: {build_id}", user_id=user_id)
         
-        background_tasks.add_task(process_build, build_id, project)
+        logging.info(f"🎯 Adding background task for build {build_id}")
+        background_tasks.add_task(process_build_with_timeout, build_id, project, 15)
+        logging.info(f"✅ Background task added for build {build_id}")
         
         return result.data[0] if result.data else build
     except HTTPException:
@@ -1462,11 +1466,20 @@ async def create_build(
 async def process_build(build_id: str, project: dict):
     """Process build with real Android compilation"""
     
+    # ✅ AJOUTER CES LOGS EN PREMIER
+    logging.info("=" * 60)
+    logging.info(f"🚀 BUILD STARTED: {build_id}")
+    logging.info(f"📦 Project: {project.get('name', 'Unknown')}")
+    logging.info(f"🔧 Platform: {project.get('platform', 'unknown')}")
+    logging.info("=" * 60)
+    
     # CORRECTION : Vérifier que GENERATOR_AVAILABLE est défini
     try:
         generator_available = GENERATOR_AVAILABLE
+        logging.info(f"✅ Generator available: {generator_available}")
     except NameError:
         generator_available = False
+        logging.error("❌ GENERATOR_AVAILABLE not defined!")
     
     if DEV_MODE:
         # Trouver le build dans le store
@@ -1749,6 +1762,58 @@ async def process_build(build_id: str, project: dict):
         logging.info(f"✅ Build {build_id} terminé")
     except Exception as e:
         logging.error(f"Error in process_build: {e}", exc_info=True)
+
+async def process_build_with_timeout(build_id: str, project: dict, timeout_minutes: int = 15):
+    """Wrapper avec timeout et logs détaillés"""
+    
+    logging.info(f"🎬 process_build_with_timeout CALLED for build {build_id}")
+    logging.info(f"⏱️ Timeout set to {timeout_minutes} minutes")
+    
+    try:
+        logging.info("▶️ Starting asyncio.wait_for...")
+        
+        await asyncio.wait_for(
+            process_build(build_id, project),
+            timeout=timeout_minutes * 60
+        )
+        
+        logging.info(f"✅ Build {build_id} completed successfully")
+        
+    except asyncio.TimeoutError:
+        logging.error(f"❌ BUILD TIMEOUT: {build_id} exceeded {timeout_minutes} minutes")
+        
+        client = get_supabase_client(use_service_role=True)
+        if client:
+            try:
+                client.table("builds").update({
+                    "status": "failed",
+                    "phase": "timeout",
+                    "progress": 0,
+                    "error_message": f"Build exceeded {timeout_minutes} minute timeout",
+                    "completed_at": datetime.now(timezone.utc).isoformat()
+                }).eq("id", build_id).execute()
+                logging.info(f"✅ Build {build_id} marked as failed in DB")
+            except Exception as db_error:
+                logging.error(f"❌ Failed to update DB: {db_error}")
+        
+        await log_system_event("error", "build", f"Build {build_id} timeout", user_id=project.get('user_id'))
+        
+    except Exception as e:
+        logging.error(f"❌ BUILD ERROR: {build_id}", exc_info=True)
+        logging.error(f"Error type: {type(e).__name__}")
+        logging.error(f"Error message: {str(e)}")
+        
+        client = get_supabase_client(use_service_role=True)
+        if client:
+            try:
+                client.table("builds").update({
+                    "status": "failed",
+                    "phase": "error",
+                    "error_message": f"{type(e).__name__}: {str(e)}",
+                    "completed_at": datetime.now(timezone.utc).isoformat()
+                }).eq("id", build_id).execute()
+            except Exception as db_error:
+                logging.error(f"❌ Failed to update DB: {db_error}")
 
 # ==================== BUILD ENDPOINTS (SUITE) ====================
 
@@ -3404,6 +3469,42 @@ if ENVIRONMENT == "production":
 
 # Include routers
 app.include_router(api_router)
+
+@app.on_event("startup")
+async def startup_event():
+    """Vérifier la configuration au démarrage"""
+    logging.info("=" * 60)
+    logging.info("🚀 STARTUP CHECKS")
+    logging.info("=" * 60)
+    
+    # Vérifier le générateur
+    try:
+        from generator import NativeTemplateGenerator
+        _ = NativeTemplateGenerator()
+        logging.info("✅ Generator loaded successfully")
+        logging.info(f"✅ GENERATOR_AVAILABLE = {GENERATOR_AVAILABLE}")
+    except Exception as e:
+        logging.error(f"❌ Generator failed to load: {e}")
+    
+    # Vérifier AndroidBuilder
+    try:
+        from android_builder import AndroidBuilder
+        test_builder = AndroidBuilder(Path(__file__).parent)
+        deps_ok, deps_msg = test_builder.check_dependencies()
+        if deps_ok:
+            logging.info(f"✅ AndroidBuilder ready: {deps_msg}")
+        else:
+            logging.warning(f"⚠️ AndroidBuilder missing deps: {deps_msg}")
+    except Exception as e:
+        logging.error(f"❌ AndroidBuilder failed: {e}")
+    
+    # Vérifier Supabase
+    if SUPABASE_URL and SUPABASE_SERVICE_KEY:
+        logging.info("✅ Supabase configured")
+    else:
+        logging.warning("⚠️ Supabase not fully configured")
+    
+    logging.info("=" * 60)
 
 # Upload router
 try:
