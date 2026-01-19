@@ -1,4 +1,4 @@
-# Dockerfile pour Backend (FastAPI)
+# Dockerfile optimisé pour Backend (FastAPI) avec Supabase Storage
 FROM python:3.12-slim
 
 # Set working directory
@@ -31,7 +31,7 @@ RUN apt-get update && \
     libasound2 \
     libxshmfence1 \
     libglib2.0-0 \
-    # Fonts modernes (compatibles Debian Trixie)
+    # Fonts modernes
     fonts-liberation \
     fonts-noto-color-emoji \
     fonts-unifont \
@@ -46,7 +46,7 @@ ENV PATH="$JAVA_HOME/bin:$PATH"
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright (SANS --with-deps car dépendances déjà installées)
+# Install Playwright (sans --with-deps car dépendances déjà installées)
 RUN playwright install chromium
 
 # Copy application code
@@ -65,7 +65,9 @@ EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=60s --timeout=10s --start-period=120s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
+    CMD python -c "import requests; requests.get('http://localhost:8000/api/health')" || exit 1
 
-# Run the application
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 4 --timeout-keep-alive 300
+# ✅ OPTIMISÉ : Moins de workers pour économiser la RAM
+# Avec Supabase Storage, les APKs ne transitent plus par le serveur
+# donc nous pouvons réduire les workers
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2 --limit-concurrency 20 --timeout-keep-alive 300

@@ -6,7 +6,7 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, BackgroundTasks, UploadFile, File, Header, Request, Query
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from dotenv import load_dotenv
@@ -48,7 +48,7 @@ except ImportError:
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict, EmailStr, HttpUrl, field_validator
 from urllib.parse import urlparse
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, BinaryIO
 import uuid
 from datetime import datetime, timezone, timedelta
 import json
@@ -195,6 +195,91 @@ def get_supabase_client(token: Optional[str] = None, use_service_role: bool = Fa
     except Exception as e:
         logging.warning(f"Error creating Supabase client: {e}")
         return None
+
+async def upload_apk_to_supabase(apk_bytes: bytes, build_id: str, project_id: str) -> str:
+    """
+    Upload l'APK sur Supabase Storage
+    Retourne l'URL publique de téléchargement
+    """
+    try:
+        client = get_supabase_client(use_service_role=True)
+        if not client:
+            raise Exception("Supabase client unavailable")
+        
+        # Chemin dans le bucket: projects/{project_id}/builds/{build_id}.apk
+        storage_path = f"projects/{project_id}/builds/{build_id}.apk"
+        
+        logger.info(f"📤 Uploading APK to Supabase: {storage_path} ({len(apk_bytes) / 1024 / 1024:.2f} MB)")
+        
+        # Upload sur Supabase Storage
+        client.storage.from_('apks').upload(
+            path=storage_path,
+            file=apk_bytes,
+            file_options={
+                "content-type": "application/vnd.android.package-archive",
+                "cache-control": "3600",
+                "upsert": "true"
+            }
+        )
+        
+        logger.info(f"✅ APK uploadé sur Supabase: {storage_path}")
+        
+        # Générer l'URL publique
+        public_url = client.storage.from_('apks').get_public_url(storage_path)
+        
+        # Sauvegarder l'URL dans la DB
+        client.table("builds").update({
+            "download_url": public_url,
+            "storage_path": storage_path,
+            "file_size": len(apk_bytes)
+        }).eq("id", build_id).execute()
+        
+        logger.info(f"✅ URL publique générée: {public_url}")
+        
+        return public_url
+        
+    except Exception as e:
+        logger.error(f"❌ Erreur upload Supabase: {e}", exc_info=True)
+        raise
+
+async def cleanup_old_builds_storage(days: int = 30):
+    """
+    Supprime les builds de plus de X jours pour libérer l'espace Supabase
+    """
+    try:
+        client = get_supabase_client(use_service_role=True)
+        if not client:
+            return
+        
+        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        
+        # Récupérer les vieux builds
+        result = client.table("builds").select(
+            "id, storage_path"
+        ).lt("created_at", cutoff_date).execute()
+        
+        deleted_count = 0
+        for build in result.data:
+            try:
+                storage_path = build.get("storage_path")
+                if storage_path:
+                    # Supprimer du storage
+                    client.storage.from_('apks').remove([storage_path])
+                
+                # Supprimer de la DB
+                client.table("builds").delete().eq("id", build["id"]).execute()
+                
+                deleted_count += 1
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Impossible de supprimer {build['id']}: {e}")
+        
+        logger.info(f"🧹 {deleted_count} builds supprimés (plus de {days} jours)")
+        return {"deleted": deleted_count}
+        
+    except Exception as e:
+        logger.error(f"❌ Erreur nettoyage: {e}")
+        return {"deleted": 0, "error": str(e)}
 
 # Initialize rate limiter
 RATE_LIMIT_ENABLED = os.environ.get('RATE_LIMIT_ENABLED', 'true').lower() == 'true'
@@ -1450,25 +1535,41 @@ async def process_build(build_id: str, project: dict):
                             )
                         
                         if success and apk_bytes:
-                            # Sauvegarder l'APK dans un fichier temporaire
-                            import tempfile
-                            apk_file = tempfile.NamedTemporaryFile(
-                                delete=False, 
-                                suffix='.apk', 
-                                prefix=f'{safe_name}_'
-                            )
-                            apk_file.write(apk_bytes)
-                            apk_file.close()
-                            
-                            # Stocker le chemin dans le build
-                            build_in_memory[build_id] = {
-                                'apk_path': apk_file.name,
-                                'apk_size': len(apk_bytes),
-                                'compiled': True
-                            }
-                            
-                            logging.info(f"✅ APK compilé! Taille: {len(apk_bytes) / 1024 / 1024:.2f} MB")
-                            logging.info(f"📁 APK sauvegardé: {apk_file.name}")
+                            # ✅ NOUVEAU : Upload sur Supabase au lieu de sauvegarder localement
+                            try:
+                                public_url = await upload_apk_to_supabase(
+                                    apk_bytes, 
+                                    build_id, 
+                                    project['id']
+                                )
+                                
+                                logging.info(f"✅ APK uploadé sur Supabase! Taille: {len(apk_bytes) / 1024 / 1024:.2f} MB")
+                                logging.info(f"🔗 URL: {public_url}")
+                                
+                                apk_compiled = True
+                                apk_size = len(apk_bytes)
+                                
+                            except Exception as upload_error:
+                                logging.error(f"❌ Erreur upload Supabase: {upload_error}")
+                                # Fallback : sauvegarder localement
+                                import tempfile
+                                apk_file = tempfile.NamedTemporaryFile(
+                                    delete=False, 
+                                    suffix='.apk', 
+                                    prefix=f'{safe_name}_'
+                                )
+                                apk_file.write(apk_bytes)
+                                apk_file.close()
+                                
+                                build_in_memory[build_id] = {
+                                    'apk_path': apk_file.name,
+                                    'apk_size': len(apk_bytes),
+                                    'compiled': True
+                                }
+                                
+                                logging.warning(f"⚠️ Fallback: APK sauvegardé localement: {apk_file.name}")
+                                apk_compiled = True
+                                apk_size = len(apk_bytes)
                         else:
                             logging.warning(f"⚠️ Compilation échouée: {error_msg[:200] if error_msg else 'Erreur inconnue'}")
                     except ImportError:
@@ -1515,6 +1616,7 @@ async def process_build(build_id: str, project: dict):
         
         apk_compiled = False
         apk_size = 0
+        download_url_override = None
         
         for phase_info in phases:
             phase = phase_info['phase']
@@ -1566,27 +1668,42 @@ async def process_build(build_id: str, project: dict):
                             )
                         
                         if success and apk_bytes:
-                            # Sauvegarder l'APK dans un fichier temporaire
-                            import tempfile
-                            apk_file = tempfile.NamedTemporaryFile(
-                                delete=False, 
-                                suffix='.apk', 
-                                prefix=f'{safe_name}_'
-                            )
-                            apk_file.write(apk_bytes)
-                            apk_file.close()
-                            
-                            # Stocker le chemin dans le build
-                            build_in_memory[build_id] = {
-                                'apk_path': apk_file.name,
-                                'apk_size': len(apk_bytes),
-                                'compiled': True
-                            }
-                            
-                            apk_compiled = True
-                            apk_size = len(apk_bytes)
-                            logging.info(f"✅ APK compilé! Taille: {apk_size / 1024 / 1024:.2f} MB")
-                            logging.info(f"📁 APK sauvegardé: {apk_file.name}")
+                            # ✅ NOUVEAU : Upload sur Supabase au lieu de sauvegarder localement
+                            try:
+                                public_url = await upload_apk_to_supabase(
+                                    apk_bytes, 
+                                    build_id, 
+                                    project['id']
+                                )
+                                
+                                logging.info(f"✅ APK uploadé sur Supabase! Taille: {len(apk_bytes) / 1024 / 1024:.2f} MB")
+                                logging.info(f"🔗 URL: {public_url}")
+                                
+                                apk_compiled = True
+                                apk_size = len(apk_bytes)
+                                download_url_override = public_url
+                                
+                            except Exception as upload_error:
+                                logging.error(f"❌ Erreur upload Supabase: {upload_error}")
+                                # Fallback : sauvegarder localement
+                                import tempfile
+                                apk_file = tempfile.NamedTemporaryFile(
+                                    delete=False, 
+                                    suffix='.apk', 
+                                    prefix=f'{safe_name}_'
+                                )
+                                apk_file.write(apk_bytes)
+                                apk_file.close()
+                                
+                                build_in_memory[build_id] = {
+                                    'apk_path': apk_file.name,
+                                    'apk_size': len(apk_bytes),
+                                    'compiled': True
+                                }
+                                
+                                logging.warning(f"⚠️ Fallback: APK sauvegardé localement: {apk_file.name}")
+                                apk_compiled = True
+                                apk_size = len(apk_bytes)
                         else:
                             logging.warning(f"⚠️ Compilation échouée: {error_msg[:200] if error_msg else 'Erreur inconnue'}")
                     except ImportError:
@@ -1626,7 +1743,7 @@ async def process_build(build_id: str, project: dict):
             "artifacts": artifacts,
             "completed_at": completed.isoformat(),
             "duration_seconds": duration,
-            "download_url": f"/api/builds/{build_id}/download"
+            "download_url": download_url_override or f"/api/builds/{build_id}/download"
         }).eq("id", build_id).execute()
         
         logging.info(f"✅ Build {build_id} terminé")
@@ -1753,7 +1870,7 @@ async def delete_all_builds(user_id: str = Depends(get_current_user)):
 
 @api_router.get("/builds/{build_id}/download")
 async def download_build(build_id: str, user_id: str = Depends(get_current_user)):
-    """Télécharge l'APK compilé ou le projet source"""
+    """Télécharge l'APK depuis Supabase Storage ou génère si nécessaire"""
     
     try:
         logging.info(f"📥 Download request for build {build_id}")
@@ -1784,31 +1901,44 @@ async def download_build(build_id: str, user_id: str = Depends(get_current_user)
         if build.get('user_id') != user_id:
             raise HTTPException(status_code=403, detail="Forbidden")
         
-        # Récupérer le projet
-        if DEV_MODE:
-            project = DEV_PROJECTS_STORE.get(build['project_id'])
-            if not project:
-                raise HTTPException(status_code=404, detail="Project not found")
-        else:
-            project_response = client.table("projects").select("*").eq("id", build["project_id"]).execute()
-            if not project_response.data:
-                raise HTTPException(status_code=404, detail="Project not found")
-            project = project_response.data[0]
+        # ✅ NOUVEAU : Vérifier si l'APK existe sur Supabase Storage
+        download_url = build.get('download_url')
+        storage_path = build.get('storage_path')
         
-        platform = build.get('platform', 'android')
-        project_name = project.get('name', 'MyApp')
-        build_status = build.get('status', 'unknown')
+        if download_url and storage_path:
+            # Vérifier que le fichier existe toujours sur Supabase
+            try:
+                exists = client.storage.from_('apks').list(path=str(Path(storage_path).parent))
+                file_exists = any(f['name'] == Path(storage_path).name for f in exists)
+                
+                if file_exists:
+                    logging.info(f"✅ APK trouvé sur Supabase Storage, redirection vers: {download_url}")
+                    return RedirectResponse(url=download_url)
+                else:
+                    logging.warning(f"⚠️ APK non trouvé sur Supabase: {storage_path}")
+            except Exception as check_error:
+                logging.warning(f"⚠️ Erreur vérification Supabase: {check_error}")
         
-        # VÉRIFIER SI UN APK A ÉTÉ COMPILÉ EN MÉMOIRE
+        # Si pas sur Supabase, vérifier si en mémoire locale (fallback)
         if build_id in build_in_memory and build_in_memory[build_id].get('apk_path'):
             apk_info = build_in_memory[build_id]
             apk_path = Path(apk_info['apk_path'])
             
             if apk_path.exists():
-                logging.info(f"✅ APK trouvé en mémoire: {apk_path} ({apk_info['apk_size'] / 1024 / 1024:.2f} MB)")
+                logging.info(f"✅ APK trouvé en mémoire locale: {apk_path}")
                 
-                safe_filename = "".join(c for c in project_name if c.isalnum() or c in (' ', '-', '_')).strip()
-                filename = f"{safe_filename.lower().replace(' ', '-')}.apk"
+                # Récupérer le projet
+                if DEV_MODE:
+                    project = DEV_PROJECTS_STORE.get(build['project_id'])
+                else:
+                    project_response = client.table("projects").select("*").eq("id", build["project_id"]).execute()
+                    project = project_response.data[0] if project_response.data else None
+                
+                if project:
+                    safe_filename = "".join(c for c in project.get('name', 'MyApp') if c.isalnum() or c in (' ', '-', '_')).strip()
+                    filename = f"{safe_filename.lower().replace(' ', '-')}.apk"
+                else:
+                    filename = "app.apk"
                 
                 def iterfile():
                     with open(apk_path, "rb") as f:
@@ -1824,10 +1954,25 @@ async def download_build(build_id: str, user_id: str = Depends(get_current_user)
                     }
                 )
         
-        # POUR ANDROID : TOUJOURS ESSAYER DE COMPILER L'APK
+        # Si pas d'APK disponible, générer le projet source ou recompiler
+        logging.info(f"⚠️ APK non disponible pour le build {build_id}, génération à la volée...")
+        
+        # Récupérer le projet
+        if DEV_MODE:
+            project = DEV_PROJECTS_STORE.get(build['project_id'])
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+        else:
+            project_response = client.table("projects").select("*").eq("id", build["project_id"]).execute()
+            if not project_response.data:
+                raise HTTPException(status_code=404, detail="Project not found")
+            project = project_response.data[0]
+        
+        platform = build.get('platform', 'android')
+        build_status = build.get('status', 'unknown')
+        
+        # Pour Android complété, essayer de recompiler
         if platform == 'android' and build_status == "completed":
-            logging.info("🚀 Compilation APK en temps réel...")
-            
             try:
                 generator_available = GENERATOR_AVAILABLE
             except NameError:
@@ -1840,22 +1985,14 @@ async def download_build(build_id: str, user_id: str = Depends(get_current_user)
                 from android_builder import AndroidBuilder
                 builder = AndroidBuilder(Path(__file__).parent)
                 
-                # Vérifier dépendances
-                deps_ok, deps_error = builder.check_dependencies()
-                if not deps_ok:
-                    logging.error(f"❌ Dependencies missing: {deps_error}")
-                    raise HTTPException(
-                        status_code=503, 
-                        detail=f"Build dependencies not available: {deps_error}. Please ensure Java JDK 17+ is installed."
-                    )
-                
-                # Générer le projet
+                project_name = project.get('name', 'MyApp')
                 safe_name = "".join(c.lower() if c.isalnum() else '' for c in project_name)
                 package_name = f"com.nativiweb.{safe_name}" if safe_name else "com.nativiweb.app"
                 web_url = project.get('web_url', '')
                 features = normalize_features(project.get('features', []))
                 
-                logging.info(f"📦 Generating Android project: {project_name}")
+                logging.info(f"🔨 Recompilation APK pour {project_name}...")
+                
                 project_zip = generator.generate_android_project(
                     project_name=project_name,
                     package_name=package_name,
@@ -1864,73 +2001,49 @@ async def download_build(build_id: str, user_id: str = Depends(get_current_user)
                     app_icon_url=project.get('logo_url')
                 )
                 
-                # Compiler l'APK
-                logging.info(f"🔨 Compiling APK for {project_name}...")
                 success, apk_bytes, error_msg = builder.build_apk(project_zip, project_name, max_retries=3)
                 
-                if success and apk_bytes and len(apk_bytes) >= 50000:  # Minimum 50KB pour un APK valide
-                    logging.info(f"✅ APK compiled successfully! Size: {len(apk_bytes) / 1024 / 1024:.2f} MB")
+                if success and apk_bytes and len(apk_bytes) >= 50000:
+                    logging.info(f"✅ APK recompilé! Taille: {len(apk_bytes) / 1024 / 1024:.2f} MB")
                     
-                    # Sauvegarder en mémoire pour les prochains téléchargements
-                    import tempfile
-                    apk_file = tempfile.NamedTemporaryFile(
-                        delete=False, 
-                        suffix='.apk', 
-                        prefix=f'{safe_name}_'
-                    )
-                    apk_file.write(apk_bytes)
-                    apk_file.close()
-                    
-                    build_in_memory[build_id] = {
-                        'apk_path': apk_file.name,
-                        'apk_size': len(apk_bytes),
-                        'compiled': True
-                    }
-                    
-                    safe_filename = "".join(c for c in project_name if c.isalnum() or c in (' ', '-', '_')).strip()
-                    filename = f"{safe_filename.lower().replace(' ', '-')}.apk"
-                    
-                    return StreamingResponse(
-                        io.BytesIO(apk_bytes),
-                        media_type="application/vnd.android.package-archive",
-                        headers={
-                            "Content-Disposition": f'attachment; filename="{filename}"',
-                            "Content-Type": "application/vnd.android.package-archive",
-                            "Content-Length": str(len(apk_bytes))
-                        }
-                    )
+                    # Upload sur Supabase
+                    try:
+                        public_url = await upload_apk_to_supabase(
+                            apk_bytes, 
+                            build_id, 
+                            project['id']
+                        )
+                        
+                        logging.info(f"✅ APK uploadé sur Supabase: {public_url}")
+                        
+                        return RedirectResponse(url=public_url)
+                        
+                    except Exception as upload_error:
+                        logging.error(f"❌ Erreur upload Supabase après recompilation: {upload_error}")
+                        # Fallback: retourner directement les bytes
+                        safe_filename = "".join(c for c in project_name if c.isalnum() or c in (' ', '-', '_')).strip()
+                        filename = f"{safe_filename.lower().replace(' ', '-')}.apk"
+                        
+                        return StreamingResponse(
+                            io.BytesIO(apk_bytes),
+                            media_type="application/vnd.android.package-archive",
+                            headers={
+                                "Content-Disposition": f'attachment; filename="{filename}"',
+                                "Content-Type": "application/vnd.android.package-archive",
+                                "Content-Length": str(len(apk_bytes))
+                            }
+                        )
                 else:
-                    error_detail = error_msg or "Compilation failed - APK not generated"
-                    logging.error(f"❌ Compilation failed: {error_detail}")
-                    raise HTTPException(
-                        status_code=500, 
-                        detail=f"APK compilation failed: {error_detail}. Please check build logs."
-                    )
+                    raise HTTPException(status_code=500, detail=f"Recompilation failed: {error_msg}")
                     
             except HTTPException:
                 raise
-            except ImportError as e:
-                logging.error(f"❌ AndroidBuilder not available: {e}")
-                raise HTTPException(
-                    status_code=503, 
-                    detail="Android build system not available. Please check server configuration."
-                )
             except Exception as e:
-                logging.error(f"❌ Compilation error: {e}", exc_info=True)
-                raise HTTPException(
-                    status_code=500, 
-                    detail=f"Failed to compile APK: {str(e)}. Please check server logs."
-                )
+                logging.error(f"❌ Erreur recompilation: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"Failed to recompile APK: {str(e)}")
         
-        # POUR iOS OU SI BUILD NON COMPLETÉ : RETOURNER LE PROJET SOURCE
-        # (Pour Android, on ne devrait jamais arriver ici si le build est complété)
-        if platform == 'android' and build_status == "completed":
-            # Si on arrive ici pour Android avec build complété, c'est une erreur
-            logging.error(f"❌ Android build completed but APK not available for {build_id}")
-            raise HTTPException(
-                status_code=500,
-                detail="APK not available for completed Android build. Please try rebuilding."
-            )
+        # Fallback: retourner le projet source
+        logging.info("📦 Returning source project (ZIP)")
         
         try:
             generator_available = GENERATOR_AVAILABLE
@@ -1940,8 +2053,7 @@ async def download_build(build_id: str, user_id: str = Depends(get_current_user)
         if not generator_available:
             raise HTTPException(status_code=503, detail="Generator not available")
         
-        logging.info("📦 Returning source project (ZIP)")
-        
+        project_name = project.get('name', 'MyApp')
         safe_name = "".join(c.lower() if c.isalnum() else '' for c in project_name)
         web_url = project.get('web_url', '')
         features = normalize_features(project.get('features', []))
@@ -1983,6 +2095,16 @@ async def download_build(build_id: str, user_id: str = Depends(get_current_user)
     except Exception as e:
         logging.error(f"❌ Download error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.post("/admin/cleanup-builds")
+async def admin_cleanup_builds(
+    days: int = 30,
+    admin_user: Dict[str, Any] = Depends(get_admin_user)
+):
+    """Nettoyer les builds de plus de X jours (admin only)"""
+    result = await cleanup_old_builds_storage(days)
+    await log_system_event("info", "admin", f"Cleaned up old builds: {result}", user_id=admin_user.get("id"))
+    return result
 
 @api_router.post("/builds/{build_id}/publish")
 async def publish_build(
