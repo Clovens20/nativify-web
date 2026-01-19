@@ -548,16 +548,19 @@ def normalize_web_url(url: str) -> str:
     if not url:
         return url
     
-    if 'github.com' in url.lower():
+    # Convertir HttpUrl en string
+    url_str = str(url) if not isinstance(url, str) else url
+    
+    if 'github.com' in url_str.lower():
         import re
-        match = re.search(r'github\.com/([^/]+)/([^/]+)', url)
+        match = re.search(r'github\.com/([^/]+)/([^/]+)', url_str)
         if match:
             username = match.group(1)
             repo = match.group(2).replace('.git', '')
-            logging.warning(f"URL GitHub détectée: {url}. Assurez-vous que l'application web est déployée et accessible.")
-            return url
+            logging.warning(f"URL GitHub détectée: {url_str}. Assurez-vous que l'application web est déployée et accessible.")
+            return url_str
     
-    return url
+    return url_str
 
 def normalize_features(features: Optional[List]) -> List[Dict[str, Any]]:
     """Normalize features to consistent format"""
