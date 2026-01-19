@@ -329,8 +329,8 @@ class NativiWebBridge(private val context: Context, private val webView: WebView
 class AndroidBuilder:
     """Classe pour compiler des projets Android et générer des APKs fonctionnels"""
     
-    def __init__(self):
-        # Configurer Java automatiquement
+    def __init__(self, project_root: Optional[Path] = None):
+        # Configurer Java automatiquement AVANT tout
         _setup_java_environment()
         
         env_path = Path(__file__).parent / '.env'
@@ -343,19 +343,16 @@ class AndroidBuilder:
                 load_dotenv(root_env)
                 logger.info(f"🔍 .env chargé depuis: {root_env}")
         
-        # Auto-détection Java
-        java_home = os.environ.get('JAVA_HOME')
-        if not java_home:
-            java_home = self._find_java_home()
-        
-        self.java_home = java_home
+        self.project_root = project_root
+        self.java_home = os.environ.get('JAVA_HOME', '')
         
         # Auto-détection Android SDK
         android_home = (
             os.environ.get('ANDROID_HOME') or 
-            os.environ.get('ANDROID_SDK_ROOT')
+            os.environ.get('ANDROID_SDK_ROOT') or
+            'C:\\Android'
         )
-        if not android_home:
+        if not android_home or (os.name != 'nt' and android_home.startswith('C:\\')):
             android_home = self._find_android_sdk()
         
         self.android_home = android_home
@@ -416,16 +413,23 @@ android.nonFinalResIds=false
                 
                 # Donner les permissions d'exécution à gradlew
                 gradlew_path = self.android_dir / "gradlew"
-                if gradlew_path.exists():
+                if gradlew_path.exists() and os.name != 'nt':
                     os.chmod(gradlew_path, 0o755)
                 
                 return self._run_gradle_build()
                 
             except Exception as e:
                 last_error = str(e)
-                logger.warning(f"❌ Tentative {attempt} échouée: {last_error[:200]}")
+                logger.warning(f"❌ Tentative {attempt} échouée: {last_error}")
         
-        raise Exception(last_error or "Échec de la compilation")
+                if attempt < max_retries:
+                    logger.info(f"🔧 Tentative de correction automatique avant retry {attempt + 1}/{max_retries}")
+                    try:
+                        self._auto_fix_errors(last_error, attempt)
+                    except Exception as fix_error:
+                        logger.warning(f"⚠️ Correction automatique impossible: {fix_error}")
+        
+        raise Exception(f"❌ Échec après {max_retries} tentatives: {last_error}")
 
     def _run_gradle_build(self) -> Path:
         """Lance la compilation Gradle"""
@@ -460,10 +464,8 @@ android.nonFinalResIds=false
         
         # Variables d'environnement pour Gradle
         env = os.environ.copy()
-        if self.java_home:
-            env['JAVA_HOME'] = self.java_home
-        if self.android_home:
-            env['ANDROID_HOME'] = self.android_home
+        env['JAVA_HOME'] = self.java_home
+        env['ANDROID_HOME'] = self.android_home
         
         # Options JVM pour Gradle (via variable d'environnement)
         env['GRADLE_OPTS'] = '-Xmx2048m -Dfile.encoding=UTF-8 -Dorg.gradle.daemon=false'
@@ -492,13 +494,8 @@ android.nonFinalResIds=false
             logger.error(f"📋 Log complet ({len(full_output)} chars) sauvegardé dans: {log_file}")
             
             if result.returncode != 0:
-                errors = self._extract_compilation_errors(full_output)
-                if errors:
-                    error_msg = "❌ Erreurs de compilation:\n\n" + "\n\n---\n\n".join(errors)
-                else:
-                    last_lines = '\n'.join(full_output.split('\n')[-100:])
-                    error_msg = f"❌ Compilation échouée:\n{last_lines}"
-                raise Exception(error_msg)
+                error_msg = self._parse_gradle_error(result.stdout, result.stderr)
+                raise Exception(f"❌ Compilation échouée:\n{error_msg}")
             
             # Vérifier que l'APK existe
             apk_candidates = [
@@ -734,6 +731,32 @@ android.nonFinalResIds=false
                     break
         
         return errors[:5]  # Limiter à 5 erreurs pour éviter surcharge
+
+    def _auto_fix_errors(self, error_message: str, attempt: int) -> None:
+        """Tente de corriger automatiquement les erreurs Gradle connues"""
+        if not hasattr(self, "android_dir"):
+            return
+        
+        gradle_log = self.android_dir / "gradle_build.log"
+        if not gradle_log.exists():
+            return
+        
+        try:
+            full_output = gradle_log.read_text(encoding='utf-8', errors='ignore')
+        except Exception:
+            full_output = ""
+        
+        if full_output:
+            AndroidBuilderErrorHandler.attempt_auto_fix(self.android_dir, full_output, attempt + 1)
+
+    def _parse_gradle_error(self, stdout: str, stderr: str) -> str:
+        """Parse les erreurs Gradle pour un message plus lisible"""
+        full_output = f"{stdout}\n{stderr}"
+        errors = self._extract_compilation_errors(full_output)
+        if errors:
+            return "\n\n---\n\n".join(errors)
+        last_lines = '\n'.join(full_output.split('\n')[-100:])
+        return last_lines or "Erreur de compilation inconnue"
     
     def build_apk(self, project_zip: bytes, project_name: str, max_retries: int = 2) -> Tuple[bool, Optional[bytes], Optional[str]]:
         """

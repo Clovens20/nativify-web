@@ -29,10 +29,16 @@ RUN apt-get update && \
     libpango-1.0-0 \
     libcairo2 \
     libasound2 \
+    libxshmfence1 \
+    libglib2.0-0 \
+    # Fonts modernes (compatibles Debian Trixie)
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    fonts-unifont \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Set Java environment variables (Linux paths, not Windows!)
+# Set Java environment variables
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 ENV PATH="$JAVA_HOME/bin:$PATH"
 
@@ -40,8 +46,8 @@ ENV PATH="$JAVA_HOME/bin:$PATH"
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers BEFORE switching to non-root user
-RUN pip install playwright && playwright install --with-deps chromium
+# Install Playwright (SANS --with-deps car dépendances déjà installées)
+RUN playwright install chromium
 
 # Copy application code
 COPY . .
