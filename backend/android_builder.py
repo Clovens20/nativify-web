@@ -3,6 +3,7 @@ Système de build Android réel pour compiler les projets Android et générer d
 VERSION CORRIGÉE - Meilleure gestion des erreurs et téléchargement automatique
 """
 import os
+import platform
 import subprocess
 import tempfile
 import shutil
@@ -26,6 +27,47 @@ if not logger.handlers:
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
+
+
+def _setup_java_environment():
+    """Configure JAVA_HOME automatiquement selon l'OS"""
+    # Si JAVA_HOME existe déjà et est valide, ne rien faire
+    java_home = os.environ.get('JAVA_HOME')
+    if java_home:
+        java_exe = os.path.join(java_home, 'bin', 'java.exe' if os.name == 'nt' else 'java')
+        if os.path.exists(java_exe):
+            return  # JAVA_HOME déjà configuré correctement
+    
+    # Auto-détection selon l'OS
+    system = platform.system()
+    
+    if system == 'Linux':
+        # Chemins courants sur Linux/Docker
+        possible_paths = [
+            '/usr/lib/jvm/java-21-openjdk-amd64',
+            '/usr/lib/jvm/java-17-openjdk-amd64',
+            '/usr/lib/jvm/default-java',
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                os.environ['JAVA_HOME'] = path
+                logger.info(f"✅ JAVA_HOME auto-détecté: {path}")
+                return
+                
+    elif system == 'Windows':
+        # Chemins courants sur Windows
+        possible_paths = [
+            r'C:\Program Files\Eclipse Adoptium\jdk-17.0.17.10-hotspot',
+            r'C:\Program Files\Java\jdk-17',
+            r'C:\Program Files\Java\jdk-21',
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                os.environ['JAVA_HOME'] = path
+                logger.info(f"✅ JAVA_HOME auto-détecté: {path}")
+                return
+    
+    logger.warning("⚠️ JAVA_HOME non trouvé automatiquement")
 
 
 class AndroidBuilderErrorHandler:
@@ -288,6 +330,9 @@ class AndroidBuilder:
     """Classe pour compiler des projets Android et générer des APKs fonctionnels"""
     
     def __init__(self):
+        # Configurer Java automatiquement
+        _setup_java_environment()
+        
         env_path = Path(__file__).parent / '.env'
         if env_path.exists():
             load_dotenv(env_path)
