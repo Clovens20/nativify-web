@@ -41,7 +41,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install Playwright browsers BEFORE switching to non-root user
-RUN playwright install chromium
+RUN pip install playwright && playwright install --with-deps chromium
 
 # Copy application code
 COPY . .

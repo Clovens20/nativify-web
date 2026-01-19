@@ -364,6 +364,163 @@ class AndroidBuilder:
         logger.info(f"🔍 AndroidBuilder init - ANDROID_HOME: {self.android_home}")
         
         self.check_dependencies()
+
+    def _create_local_properties(self) -> None:
+        """Crée le fichier local.properties avec le SDK Android si disponible"""
+        if not self.android_home:
+            return
+        local_properties = self.android_dir / 'local.properties'
+        sdk_path = self.android_home.replace('\\', '\\\\') if os.name == 'nt' else self.android_home
+        local_properties.write_text(f'sdk.dir={sdk_path}\n', encoding='utf-8')
+        logger.info("📝 local.properties créé")
+
+    def _create_gradle_properties(self) -> None:
+        """Crée le fichier gradle.properties avec les bonnes options JVM"""
+        gradle_props_path = self.android_dir / "gradle.properties"
+        gradle_props_content = """# Gradle Properties
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+org.gradle.parallel=true
+org.gradle.caching=true
+org.gradle.daemon=false
+
+# Android Properties
+android.useAndroidX=true
+android.enableJetifier=true
+
+# Kotlin
+kotlin.code.style=official
+
+# Build optimizations
+android.defaults.buildfeatures.buildconfig=true
+android.nonTransitiveRClass=false
+android.nonFinalResIds=false
+"""
+        gradle_props_path.write_text(gradle_props_content, encoding='utf-8')
+        logger.info("📝 gradle.properties créé")
+
+    def _compile_with_retry(self, max_retries: int = 4) -> Path:
+        """Compile avec système de retry et auto-correction"""
+        last_error = None
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"🔄 Nouvelle tentative {attempt}/{max_retries}...")
+                
+                # Attendre avant retry (sauf première tentative)
+                if attempt > 1:
+                    time.sleep(min(attempt * 3, 10))
+                
+                # Créer local.properties ET gradle.properties
+                self._create_local_properties()
+                self._create_gradle_properties()
+                
+                # Donner les permissions d'exécution à gradlew
+                gradlew_path = self.android_dir / "gradlew"
+                if gradlew_path.exists():
+                    os.chmod(gradlew_path, 0o755)
+                
+                return self._run_gradle_build()
+                
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"❌ Tentative {attempt} échouée: {last_error[:200]}")
+        
+        raise Exception(last_error or "Échec de la compilation")
+
+    def _run_gradle_build(self) -> Path:
+        """Lance la compilation Gradle"""
+        logger.info("🔨 Lancement de la compilation...")
+        
+        # Déterminer le wrapper Gradle
+        if os.name == 'nt':  # Windows
+            gradlew = self.android_dir / "gradlew.bat"
+        else:  # Linux/Mac
+            gradlew = self.android_dir / "gradlew"
+        
+        if not gradlew.exists():
+            raise FileNotFoundError(f"Gradle wrapper non trouvé: {gradlew}")
+        
+        # Donner les permissions d'exécution (Linux/Mac uniquement)
+        if os.name != 'nt':
+            os.chmod(gradlew, 0o755)
+        
+        # Commande de compilation - SANS --no-daemon sur Linux pour éviter les problèmes JVM
+        cmd = [
+            str(gradlew),
+            "assembleDebug",
+            "--stacktrace",
+            "--warning-mode", "all",
+        ]
+        
+        # Ajouter --no-build-cache seulement si on a assez de mémoire
+        if os.name != 'nt':  # Sur serveur Linux, éviter le cache
+            cmd.append("--no-build-cache")
+        
+        logger.info(f"💻 Commande: {' '.join(cmd)}")
+        
+        # Variables d'environnement pour Gradle
+        env = os.environ.copy()
+        if self.java_home:
+            env['JAVA_HOME'] = self.java_home
+        if self.android_home:
+            env['ANDROID_HOME'] = self.android_home
+        
+        # Options JVM pour Gradle (via variable d'environnement)
+        env['GRADLE_OPTS'] = '-Xmx2048m -Dfile.encoding=UTF-8 -Dorg.gradle.daemon=false'
+        
+        start_time = time.time()
+        
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=self.android_dir,
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10 minutes max
+                env=env,
+                check=False
+            )
+            
+            build_time = time.time() - start_time
+            logger.info(f"⏱️ Temps de compilation: {build_time:.1f}s")
+            
+            # Sauvegarder les logs
+            log_file = self.android_dir / "gradle_build.log"
+            full_output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+            log_file.write_text(full_output, encoding='utf-8')
+            
+            logger.error(f"📋 Log complet ({len(full_output)} chars) sauvegardé dans: {log_file}")
+            
+            if result.returncode != 0:
+                errors = self._extract_compilation_errors(full_output)
+                if errors:
+                    error_msg = "❌ Erreurs de compilation:\n\n" + "\n\n---\n\n".join(errors)
+                else:
+                    last_lines = '\n'.join(full_output.split('\n')[-100:])
+                    error_msg = f"❌ Compilation échouée:\n{last_lines}"
+                raise Exception(error_msg)
+            
+            # Vérifier que l'APK existe
+            apk_candidates = [
+                self.android_dir / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk",
+                self.android_dir / "build" / "outputs" / "apk" / "debug" / "app-debug.apk",
+            ]
+            apk_path = next((p for p in apk_candidates if p.exists()), None)
+            
+            if not apk_path:
+                for apk_file in self.android_dir.rglob('*.apk'):
+                    if 'debug' in str(apk_file).lower() and 'unsigned' not in str(apk_file).lower():
+                        apk_path = apk_file
+                        break
+            
+            if not apk_path or not apk_path.exists():
+                raise FileNotFoundError(f"APK non trouvé: {apk_path}")
+            
+            logger.info(f"✅ Compilation réussie: {apk_path}")
+            return apk_path
+            
+        except subprocess.TimeoutExpired:
+            raise Exception("⏱️ Timeout: La compilation a pris plus de 10 minutes")
     
     def _find_java_home(self) -> Optional[str]:
         """Trouve automatiquement JAVA_HOME"""
@@ -616,6 +773,7 @@ class AndroidBuilder:
             if not extracted_dirs:
                 raise Exception("Aucun dossier trouvé dans le ZIP")
             project_dir = extracted_dirs[0]
+            self.android_dir = project_dir
             
             logger.info(f"📂 Projet extrait: {project_dir.name}")
             
@@ -641,12 +799,8 @@ class AndroidBuilder:
                         time.sleep(3 * attempt)  # Attente progressive: 3s, 6s, 9s
                     
                     # Créer local.properties avec Android SDK si disponible
-                    if self.android_home:
-                        local_properties = project_dir / 'local.properties'
-                        sdk_path = self.android_home.replace('\\', '\\\\') if os.name == 'nt' else self.android_home
-                        with open(local_properties, 'w', encoding='utf-8') as f:
-                            f.write(f'sdk.dir={sdk_path}\n')
-                        logger.info(f"📝 local.properties créé")
+                    self._create_local_properties()
+                    self._create_gradle_properties()
                     
                     # Préparer environnement
                     env = os.environ.copy()
@@ -665,110 +819,9 @@ class AndroidBuilder:
                         except Exception as e:
                             logger.warning(f"⚠️ Impossible de nettoyer: {e}")
                     
-                    # Compiler APK
-                    logger.info("🔨 Lancement de la compilation...")
-                    
-                    if os.name == 'nt':
-                        gradle_cmd = str(gradlew_bat) if gradlew_bat.exists() else 'gradlew.bat'
-                    else:
-                        gradle_cmd = './gradlew'
-                    
-                    build_cmd = [
-                        gradle_cmd,
-                        'assembleDebug',
-                        '--no-daemon',
-                        '--stacktrace',
-                        '--warning-mode', 'all',
-                        '--no-build-cache',  # Éviter les problèmes de cache
-                    ]
-                    
-                    logger.info(f"💻 Commande: {' '.join(build_cmd)}")
-                    
-                    # Fichier de log
                     log_file = project_dir / 'gradle_build.log'
-                    
-                    # Exécuter la compilation
-                    start_time = time.time()
-                    
-                    with open(log_file, 'w', encoding='utf-8') as log_f:
-                        process = subprocess.Popen(
-                            build_cmd,
-                            cwd=str(project_dir),
-                            env=env,
-                            stdout=log_f,
-                            stderr=subprocess.STDOUT,
-                            text=True,
-                            shell=False
-                        )
-                        
-                        # Attendre avec timeout de 20 minutes (augmenté)
-                        try:
-                            process.wait(timeout=1200)
-                        except subprocess.TimeoutExpired:
-                            process.kill()
-                            raise Exception("Timeout: compilation trop longue (20 minutes max)")
-                    
-                    build_time = time.time() - start_time
-                    logger.info(f"⏱️ Temps de compilation: {build_time:.1f}s")
-                    
-                    # Lire le log complet
-                    with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
-                        full_output = f.read()
-                    
-                    if process.returncode != 0:
-                        # Extraire les erreurs
-                        errors = self._extract_compilation_errors(full_output)
-                        
-                        if errors:
-                            error_msg = "❌ Erreurs de compilation:\n\n" + "\n\n---\n\n".join(errors)
-                        else:
-                            # Fallback: dernières lignes
-                            last_lines = '\n'.join(full_output.split('\n')[-100:])
-                            error_msg = f"❌ Compilation échouée:\n{last_lines}"
-                        
-                        # Logger pour debug
-                        logger.error(f"📋 Log complet ({len(full_output)} chars) sauvegardé dans: {log_file}")
-                        
-                        # Tenter une correction automatique si ce n'est pas la dernière tentative
-                        if attempt < max_retries:
-                            logger.info(f"🔧 Tentative de correction automatique avant retry {attempt + 2}/{max_retries + 1}")
-                            if AndroidBuilderErrorHandler.attempt_auto_fix(project_dir, full_output, attempt + 1):
-                                logger.info("✅ Corrections appliquées, nouvelle tentative...")
-                                # Sauvegarder l'erreur mais continuer la boucle pour réessayer
-                                last_error = error_msg
-                                continue
-                            else:
-                                logger.warning("⚠️ Aucune correction automatique possible")
-                        
-                        # Si c'est la dernière tentative ou aucune correction possible, lever l'exception
-                        last_error = error_msg
-                        if attempt >= max_retries:
-                            raise Exception(error_msg)
-                        continue
-                    
+                    apk_path = self._run_gradle_build()
                     logger.info("✅ Compilation réussie!")
-                    
-                    # Trouver APK (plusieurs emplacements possibles)
-                    apk_candidates = [
-                        project_dir / 'app' / 'build' / 'outputs' / 'apk' / 'debug' / 'app-debug.apk',
-                        project_dir / 'build' / 'outputs' / 'apk' / 'debug' / 'app-debug.apk',
-                    ]
-                    
-                    apk_path = None
-                    for candidate in apk_candidates:
-                        if candidate.exists():
-                            apk_path = candidate
-                            break
-                    
-                    # Recherche récursive si non trouvé
-                    if not apk_path:
-                        for apk_file in project_dir.rglob('*.apk'):
-                            if 'debug' in str(apk_file).lower() and 'unsigned' not in str(apk_file).lower():
-                                apk_path = apk_file
-                                break
-                    
-                    if not apk_path or not apk_path.exists():
-                        raise Exception(f"APK non trouvé après compilation. Vérifiez {log_file}")
                     
                     logger.info(f"📱 APK trouvé: {apk_path.name}")
                     
@@ -808,6 +861,23 @@ class AndroidBuilder:
                 except Exception as e:
                     last_error = str(e)
                     logger.warning(f"❌ Tentative {attempt + 1} échouée: {last_error[:200]}")
+                    
+                    full_output = ""
+                    log_file = project_dir / 'gradle_build.log'
+                    if log_file.exists():
+                        try:
+                            full_output = log_file.read_text(encoding='utf-8', errors='ignore')
+                        except Exception:
+                            full_output = ""
+                    
+                    # Tenter une correction automatique si ce n'est pas la dernière tentative
+                    if full_output and attempt < max_retries:
+                        logger.info(f"🔧 Tentative de correction automatique avant retry {attempt + 2}/{max_retries + 1}")
+                        if AndroidBuilderErrorHandler.attempt_auto_fix(project_dir, full_output, attempt + 1):
+                            logger.info("✅ Corrections appliquées, nouvelle tentative...")
+                            continue
+                        else:
+                            logger.warning("⚠️ Aucune correction automatique possible")
                     
                     # Ne pas réessayer pour certaines erreurs
                     no_retry_keywords = [

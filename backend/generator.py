@@ -117,10 +117,23 @@ class NativeTemplateGenerator:
             zip_file.writestr(f"{base_dir}/settings.gradle", settings_gradle)
             
             # 8. gradle.properties
-            gradle_properties = """org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+            gradle_properties = """# Gradle Properties
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+org.gradle.parallel=true
+org.gradle.caching=true
+org.gradle.daemon=false
+
+# Android Properties
 android.useAndroidX=true
 android.enableJetifier=true
+
+# Kotlin
 kotlin.code.style=official
+
+# Build optimizations
+android.defaults.buildfeatures.buildconfig=true
+android.nonTransitiveRClass=false
+android.nonFinalResIds=false
 """
             zip_file.writestr(f"{base_dir}/gradle.properties", gradle_properties)
             
