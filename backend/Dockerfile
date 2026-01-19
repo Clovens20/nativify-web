@@ -70,4 +70,4 @@ HEALTHCHECK --interval=60s --timeout=10s --start-period=120s --retries=3 \
 # ✅ OPTIMISÉ : Moins de workers pour économiser la RAM
 # Avec Supabase Storage, les APKs ne transitent plus par le serveur
 # donc nous pouvons réduire les workers
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2 --limit-concurrency 20 --timeout-keep-alive 300
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --limit-concurrency 20 --timeout-keep-alive 300
