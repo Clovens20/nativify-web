@@ -1011,7 +1011,8 @@ async def track_visit(visit_data: VisitTrack, request: Request):
 
 @api_router.post("/projects")
 async def create_project(project_data: ProjectCreate, credentials: HTTPAuthorizationCredentials = Depends(security)):
-    normalized_web_url = normalize_web_url(project_data.web_url)
+    # ✅ Convertir HttpUrl en string AVANT normalize_web_url
+    normalized_web_url = normalize_web_url(str(project_data.web_url))
     features = normalize_features(project_data.features)
     
     if DEV_MODE:
@@ -1025,12 +1026,12 @@ async def create_project(project_data: ProjectCreate, credentials: HTTPAuthoriza
             "description": project_data.description or "",
             "platform": project_data.platform,
             "features": features,
-            "logo_url": project_data.logo_url,
+            "logo_url": str(project_data.logo_url) if project_data.logo_url else None,
             "status": "draft",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
-        DEV_PROJECTS_STORE[project_id] = project  # CORRECTION: Sauvegarder en mémoire
+        DEV_PROJECTS_STORE[project_id] = project
         logging.info(f"📁 Projet créé en mode DEV: {project_id}")
         return project
     
@@ -1074,7 +1075,7 @@ async def create_project(project_data: ProjectCreate, credentials: HTTPAuthoriza
             "description": project_data.description or "",
             "platform": project_data.platform,
             "features": features,
-            "logo_url": project_data.logo_url,
+            "logo_url": str(project_data.logo_url) if project_data.logo_url else None,
             "status": "draft",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat()
@@ -1091,7 +1092,6 @@ async def create_project(project_data: ProjectCreate, credentials: HTTPAuthoriza
         raise
     except Exception as e:
         logging.error(f"Error creating project: {e}")
-        # Ne pas exposer les détails d'erreur en production
         if ENVIRONMENT == "production":
             raise HTTPException(status_code=500, detail="Failed to create project. Please try again later.")
         else:
