@@ -3251,9 +3251,10 @@ async def send_push_notification(
 
 # CORS
 cors_origins = ALLOWED_ORIGINS if ENVIRONMENT == "production" else [
-    "http://localhost:3000", 
-    "http://127.0.0.1:3000", 
-    "http://localhost:3001"
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "https://nativify-web-vercel.vercel.app",
 ]
 
 app.add_middleware(
