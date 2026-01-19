@@ -409,6 +409,51 @@ android.nonFinalResIds=false
         gradle_props_path.write_text(gradle_props_content, encoding='utf-8')
         logger.info("📝 gradle.properties créé")
 
+    def _fix_gradle_wrapper_properties(self) -> None:
+        """Corrige le fichier gradle-wrapper.properties pour éviter les erreurs JVM"""
+        wrapper_props_path = self.android_dir / "gradle" / "wrapper" / "gradle-wrapper.properties"
+        
+        if not wrapper_props_path.exists():
+            logger.warning(f"⚠️ gradle-wrapper.properties non trouvé: {wrapper_props_path}")
+            return
+        
+        # Lire le contenu actuel
+        content = wrapper_props_path.read_text(encoding='utf-8')
+        
+        # S'assurer que la distribution Gradle est correcte
+        if 'distributionUrl' not in content:
+            content += '\ndistributionUrl=https\\://services.gradle.org/distributions/gradle-8.2-all.zip\n'
+        
+        # Écrire le contenu corrigé
+        wrapper_props_path.write_text(content, encoding='utf-8')
+        logger.info("📝 gradle-wrapper.properties vérifié")
+
+    def _create_gradle_wrapper_script(self) -> None:
+        """Crée un wrapper Gradle sans options JVM problématiques"""
+        gradlew_path = self.android_dir / "gradlew"
+        
+        if gradlew_path.exists():
+            # Lire le script existant
+            content = gradlew_path.read_text(encoding='utf-8', errors='ignore')
+            
+            # Remplacer les options JVM problématiques
+            if 'DEFAULT_JVM_OPTS=' in content:
+                content = content.replace(
+                    'DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"',
+                    'DEFAULT_JVM_OPTS=""'
+                )
+                content = content.replace(
+                    'DEFAULT_JVM_OPTS="-Xmx64m"',
+                    'DEFAULT_JVM_OPTS=""'
+                )
+                
+                gradlew_path.write_text(content, encoding='utf-8')
+                logger.info("🔧 Script gradlew corrigé (options JVM retirées)")
+            else:
+                logger.info("ℹ️ Script gradlew ne contient pas DEFAULT_JVM_OPTS")
+        else:
+            logger.warning(f"⚠️ Script gradlew non trouvé: {gradlew_path}")
+
     def _compile_with_retry(self, max_retries: int = 4) -> Path:
         """Compile avec système de retry et auto-correction"""
         last_error = None
@@ -421,11 +466,15 @@ android.nonFinalResIds=false
                 if attempt > 1:
                     time.sleep(min(attempt * 3, 10))
                 
-                # Créer local.properties ET gradle.properties
+                # Créer les fichiers de configuration
                 self._create_local_properties()
                 self._create_gradle_properties()
                 
-                # Donner les permissions d'exécution à gradlew
+                # NOUVEAU: Corriger les scripts Gradle
+                self._fix_gradle_wrapper_properties()
+                self._create_gradle_wrapper_script()
+                
+                # Permissions gradlew
                 gradlew_path = self.android_dir / "gradlew"
                 if gradlew_path.exists() and os.name != 'nt':
                     os.chmod(gradlew_path, 0o755)
@@ -446,50 +495,43 @@ android.nonFinalResIds=false
         raise Exception(f"❌ Échec après {max_retries} tentatives: {last_error}")
 
     def _run_gradle_build(self) -> Path:
-        """Lance la compilation Gradle"""
+        """Lance la compilation Gradle en contournant le wrapper problématique"""
         logger.info("🔨 Lancement de la compilation...")
         
-        # CRITIQUE: Vérifier que JAVA_HOME existe
-        if not self.java_home:
-            raise ValueError("JAVA_HOME n'est pas défini. Impossible de compiler.")
+        # Vérifier JAVA_HOME
+        if not self.java_home or not os.path.exists(self.java_home):
+            raise ValueError(f"JAVA_HOME invalide: {self.java_home}")
         
-        # Wrapper Gradle
-        if os.name == 'nt':
-            gradlew = self.android_dir / "gradlew.bat"
-        else:
-            gradlew = self.android_dir / "gradlew"
+        # Trouver le JAR Gradle wrapper
+        gradle_jar = self.android_dir / "gradle" / "wrapper" / "gradle-wrapper.jar"
+        if not gradle_jar.exists():
+            raise FileNotFoundError(f"gradle-wrapper.jar non trouvé: {gradle_jar}")
         
-        if not gradlew.exists():
-            raise FileNotFoundError(f"Gradle wrapper non trouvé: {gradlew}")
+        # Construire la commande Java directement (bypass du script gradlew)
+        java_exe = os.path.join(self.java_home, 'bin', 'java.exe' if os.name == 'nt' else 'java')
         
-        # Permissions (Linux/Mac)
-        if os.name != 'nt':
-            os.chmod(gradlew, 0o755)
-        
-        # Commande
         cmd = [
-            str(gradlew),
-            "assembleDebug",
-            "--stacktrace",
-            "--warning-mode", "all",
+            java_exe,
+            '-Xmx2048m',
+            '-Dfile.encoding=UTF-8',
+            '-Dorg.gradle.daemon=false',
+            '-classpath',
+            str(gradle_jar),
+            'org.gradle.wrapper.GradleWrapperMain',
+            'assembleDebug',
+            '--stacktrace',
+            '--warning-mode', 'all',
         ]
         
         if os.name != 'nt':
-            cmd.append("--no-build-cache")
+            cmd.append('--no-build-cache')
         
         logger.info(f"💻 Commande: {' '.join(cmd)}")
         
-        # Variables d'environnement - VÉRIFICATION CRITIQUE
+        # Variables d'environnement
         env = os.environ.copy()
-        
-        # S'assurer que JAVA_HOME est une chaîne valide
-        java_home = str(self.java_home) if self.java_home else ''
-        if not java_home or not os.path.exists(java_home):
-            raise ValueError(f"JAVA_HOME invalide ou inexistant: {java_home}")
-        
-        env['JAVA_HOME'] = java_home
-        env['ANDROID_HOME'] = str(self.android_home) if self.android_home else ''
-        env['GRADLE_OPTS'] = '-Xmx2048m -Dfile.encoding=UTF-8 -Dorg.gradle.daemon=false'
+        env['JAVA_HOME'] = str(self.java_home)
+        env['ANDROID_HOME'] = str(self.android_home)
         
         logger.info(f"🔧 JAVA_HOME utilisé: {env['JAVA_HOME']}")
         logger.info(f"🔧 ANDROID_HOME utilisé: {env['ANDROID_HOME']}")
