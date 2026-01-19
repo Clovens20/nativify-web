@@ -3002,8 +3002,27 @@ async def check_system_dependencies(user_id: str = Depends(get_current_user)):
     
     try:
         # Vérifier Java sur le SERVEUR
-        java_home = os.environ.get("JAVA_HOME")
+        java_home = os.environ.get("JAVA_HOME", "/usr/lib/jvm/java-21-openjdk-amd64")
         result["java_home"] = java_home
+        
+        # Si JAVA_HOME n'est pas défini, essayer de le détecter automatiquement
+        if not java_home or "C:\\" in java_home:  # Ignorer les chemins Windows locaux
+            try:
+                # Chercher Java dans les chemins standards Linux
+                java_which = subprocess.run(
+                    ["which", "java"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3
+                )
+                if java_which.returncode == 0:
+                    java_path = java_which.stdout.strip()
+                    # Remonter au JAVA_HOME depuis /usr/bin/java
+                    if java_path:
+                        java_home = str(Path(java_path).parent.parent)
+                        result["java_home"] = java_home
+            except Exception:
+                result["java_home"] = "/usr/lib/jvm/java-21-openjdk-amd64"  # Valeur par défaut
         
         try:
             # Essayer d'exécuter java -version sur le serveur
