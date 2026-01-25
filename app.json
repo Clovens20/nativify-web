@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "897b81b3-9cb4-4b1e-a738-131ab5719147"
+      }
+    },
+    "android": {
+      "package": "com.quego.nativiwebstudio"
+    }
+  }
+}
