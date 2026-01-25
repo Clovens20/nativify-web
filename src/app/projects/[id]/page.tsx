@@ -12,6 +12,7 @@ import { Progress } from '@/components/ui/progress'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { projectsApi, buildsApi, featuresApi } from '@/lib/api'
+import { getBuildBackendConfig, getBuildBackendUrl } from '@/lib/buildBackend'
 import { toast } from 'sonner'
 import { logger } from '@/lib/logger'
 import { useDownload } from '@/hooks/useDownload'
@@ -84,6 +85,7 @@ export default function ProjectDetailPage() {
   const params = useParams()
   const projectId = params.id as string
   const { download, isDownloading, progress } = useDownload()
+  const buildBackendConfig = getBuildBackendConfig()
   
   const [project, setProject] = useState<Project | null>(null)
   const [builds, setBuilds] = useState<Build[]>([])
@@ -254,7 +256,7 @@ export default function ProjectDetailPage() {
         return false
       }
       
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000'
+      const backendUrl = getBuildBackendUrl()
       const response = await fetch(`${backendUrl}/api/system/check-dependencies`, {
         headers: {
           Authorization: `Bearer ${session.access_token}`,
@@ -597,7 +599,12 @@ export default function ProjectDetailPage() {
                   <Play className="w-5 h-5 text-primary" />
                   Build Actions
                 </CardTitle>
-                <CardDescription>Start a new build for your project</CardDescription>
+                <CardDescription>
+                  Start a new build for your project
+                  <span className="block text-xs text-muted-foreground">
+                    Build backend: {buildBackendConfig.mode === 'local' ? 'Local' : 'Remote'} ({buildBackendConfig.url})
+                  </span>
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 {project.platform.includes('android') && (

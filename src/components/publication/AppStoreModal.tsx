@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { CheckCircle2, ExternalLink, Download, AlertCircle, DollarSign, FileText, Image, Shield, Apple } from 'lucide-react'
+import { getBuildBackendUrl } from '@/lib/buildBackend'
 
 interface AppStoreModalProps {
   open: boolean
@@ -12,6 +13,8 @@ interface AppStoreModalProps {
 }
 
 export function AppStoreModal({ open, onOpenChange, buildId }: AppStoreModalProps) {
+  const downloadUrl = buildId ? `${getBuildBackendUrl()}/api/builds/${buildId}/download` : undefined
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto bg-background-paper border-white/10">
@@ -138,8 +141,8 @@ export function AppStoreModal({ open, onOpenChange, buildId }: AppStoreModalProp
                     <p className="text-sm text-muted-foreground mb-3">
                       Téléchargez votre IPA depuis NativiWeb, puis utilisez Transporter ou Xcode pour l'uploader
                     </p>
-                    {buildId && (
-                      <a href={`/api/builds/${buildId}/download`} download>
+                    {downloadUrl && (
+                      <a href={downloadUrl} download>
                         <Button variant="outline" size="sm">
                           <Download className="w-4 h-4 mr-2" />
                           Télécharger IPA

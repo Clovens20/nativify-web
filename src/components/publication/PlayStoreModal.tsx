@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { CheckCircle2, ExternalLink, Download, AlertCircle, DollarSign, FileText, Image, Shield } from 'lucide-react'
+import { getBuildBackendUrl } from '@/lib/buildBackend'
 
 interface PlayStoreModalProps {
   open: boolean
@@ -12,6 +13,8 @@ interface PlayStoreModalProps {
 }
 
 export function PlayStoreModal({ open, onOpenChange, buildId }: PlayStoreModalProps) {
+  const downloadUrl = buildId ? `${getBuildBackendUrl()}/api/builds/${buildId}/download` : undefined
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto bg-background-paper border-white/10">
@@ -126,8 +129,8 @@ export function PlayStoreModal({ open, onOpenChange, buildId }: PlayStoreModalPr
                     <p className="text-sm text-muted-foreground mb-3">
                       Téléchargez votre APK depuis NativiWeb, puis allez dans <strong>Production → Créer une version</strong>
                     </p>
-                    {buildId && (
-                      <a href={`/api/builds/${buildId}/download`} download>
+                    {downloadUrl && (
+                      <a href={downloadUrl} download>
                         <Button variant="outline" size="sm">
                           <Download className="w-4 h-4 mr-2" />
                           Télécharger APK

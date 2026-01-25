@@ -9,18 +9,28 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
+import { Switch } from '@/components/ui/switch'
 import { toast } from 'sonner'
 import { Loader2, User, Mail, Shield } from 'lucide-react'
+import { getBuildBackendConfig, setBuildBackendConfig } from '@/lib/buildBackend'
 
 export default function SettingsPage() {
   const { user, loading: authLoading, logout } = useAuth()
   const router = useRouter()
+  const [buildMode, setBuildMode] = useState<'remote' | 'local'>('remote')
+  const [buildUrl, setBuildUrl] = useState('http://localhost:10000')
 
   useEffect(() => {
     if (!authLoading && !user) {
       router.push('/login')
     }
   }, [user, authLoading, router])
+
+  useEffect(() => {
+    const config = getBuildBackendConfig()
+    setBuildMode(config.mode)
+    setBuildUrl(config.url)
+  }, [])
 
   if (authLoading || !user) {
     return (
@@ -110,6 +120,53 @@ export default function SettingsPage() {
                 Delete Account
               </Button>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Build Local Settings */}
+        <Card className="bg-background-paper border-white/10">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              Build local (APK)
+            </CardTitle>
+            <CardDescription>Permet de compiler l'APK sur votre PC</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <Label>Utiliser un backend local pour les builds</Label>
+              <Switch
+                checked={buildMode === 'local'}
+                onCheckedChange={(checked) => {
+                  const mode = checked ? 'local' : 'remote'
+                  setBuildMode(mode)
+                  setBuildBackendConfig({ mode, url: buildUrl })
+                }}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>URL backend local</Label>
+              <Input
+                value={buildUrl}
+                onChange={(e) => setBuildUrl(e.target.value)}
+                onBlur={() => setBuildBackendConfig({ mode: buildMode, url: buildUrl })}
+                disabled={buildMode !== 'local'}
+                className="bg-background border-white/10"
+              />
+            </div>
+
+            <Button
+              onClick={() => {
+                setBuildBackendConfig({ mode: buildMode, url: buildUrl })
+                toast.success('Configuration build enregistrée')
+              }}
+            >
+              Enregistrer
+            </Button>
+
+            <p className="text-xs text-muted-foreground">
+              Le backend local doit être démarré et avoir Java + Android SDK installés.
+            </p>
           </CardContent>
         </Card>
       </div>

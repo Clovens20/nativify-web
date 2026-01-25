@@ -2,6 +2,7 @@ import axios from 'axios';
 import { createClient } from './supabase';
 import { apiCache } from './api-cache';
 import { logger } from './logger';
+import { getBuildApiBaseUrl, getBuildBackendUrl } from './buildBackend';
 
 // Always use backend URL to avoid proxy timeouts in dev
 const API_URL = (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000') + '/api';
@@ -163,27 +164,29 @@ export const projectsApi = {
 };
 
 // Builds API
+const buildApiUrl = () => getBuildApiBaseUrl();
+
 export const buildsApi = {
   getAll: async (projectId: string | null = null) => {
-    let url = '/builds';
+    let url = `${buildApiUrl()}/builds`;
     if (projectId) url += `?project_id=${projectId}`;
     const response = await apiClient.get(url);
     return response.data;
   },
   
   getOne: async (buildId: string) => {
-    const response = await apiClient.get(`/builds/${buildId}`);
+    const response = await apiClient.get(`${buildApiUrl()}/builds/${buildId}`);
     return response.data;
   },
   
   create: async (data: any) => {
-    const response = await apiClient.post('/builds', data);
+    const response = await apiClient.post(`${buildApiUrl()}/builds`, data);
     return response.data;
   },
   
   download: async (buildId: string): Promise<Blob> => {
     try {
-      const response = await apiClient.get(`/builds/${buildId}/download`, {
+      const response = await apiClient.get(`${buildApiUrl()}/builds/${buildId}/download`, {
         responseType: 'blob', // TRÈS IMPORTANT pour recevoir un blob
         timeout: 900000 // 15 minutes pour permettre la compilation complète de l'APK
       });
@@ -229,12 +232,8 @@ export const buildsApi = {
         throw new Error('Vous devez être connecté pour télécharger');
       }
       
-      // Utiliser fetch pour le streaming avec progression
-      const BACKEND_URL = process.env.NODE_ENV === 'production' 
-        ? (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000')
-        : 'http://127.0.0.1:8000';
-      
-      const response = await fetch(`${BACKEND_URL}/api/builds/${buildId}/download`, {
+      const backendUrl = getBuildBackendUrl();
+      const response = await fetch(`${backendUrl}/api/builds/${buildId}/download`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -300,13 +299,13 @@ export const buildsApi = {
   },
   
   delete: async (buildId: string) => {
-    const response = await apiClient.delete(`/builds/${buildId}`);
+    const response = await apiClient.delete(`${buildApiUrl()}/builds/${buildId}`);
     // Invalider le cache des builds si nécessaire
     return response.data;
   },
   
   deleteAll: async () => {
-    const response = await apiClient.delete('/builds');
+    const response = await apiClient.delete(`${buildApiUrl()}/builds`);
     // Invalider le cache des builds si nécessaire
     return response.data;
   },

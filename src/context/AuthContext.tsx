@@ -5,9 +5,9 @@ import { createClient } from '@/lib/supabase'
 import { User, Session } from '@supabase/supabase-js'
 import axios from 'axios'
 import { logger } from '@/lib/logger'
+import { getBuildApiBaseUrl } from '@/lib/buildBackend'
 
-// Always use backend URL to avoid proxy timeouts in dev
-const API_URL = (process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000') + '/api'
+const getApiUrl = () => getBuildApiBaseUrl()
 
 interface UserProfile {
   id: string
@@ -70,7 +70,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           
           // Fetch user profile from our backend
           try {
-            const response = await axios.get(`${API_URL}/auth/me`, {
+            const response = await axios.get(`${getApiUrl()}/auth/me`, {
               headers: {
                 Authorization: `Bearer ${currentSession.access_token}`
               },
@@ -174,7 +174,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         
         // Récupérer les informations utilisateur depuis le backend
         try {
-          const response = await axios.get(`${API_URL}/auth/me`, {
+          const response = await axios.get(`${getApiUrl()}/auth/me`, {
             headers: {
               Authorization: `Bearer ${newSession.access_token}`
             },
@@ -243,7 +243,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       
       logger.info('Logging in user', { email })
       
-      const response = await axios.post(`${API_URL}/auth/login`, { email, password }, { timeout: 10000 })
+      const response = await axios.post(`${getApiUrl()}/auth/login`, { email, password }, { timeout: 10000 })
       const { token, user: userData } = response.data
       
       // Vérifier que l'email correspond
@@ -279,14 +279,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const register = async (email: string, password: string, name: string) => {
     try {
-      const response = await axios.post(`${API_URL}/auth/register`, { email, password, name })
+      const response = await axios.post(`${getApiUrl()}/auth/register`, { email, password, name })
       return response.data
     } catch (error: any) {
       // Log detailed error for debugging
       logger.error('Registration error', error, {
         response: error.response?.data,
         status: error.response?.status,
-        url: `${API_URL}/auth/register`,
+        url: `${getApiUrl()}/auth/register`,
         backendUrl: process.env.NEXT_PUBLIC_BACKEND_URL
       })
       
@@ -318,7 +318,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       // Ensuite appeler les APIs de logout
       if (session?.access_token) {
         try {
-          await axios.post(`${API_URL}/auth/logout`, {}, {
+          await axios.post(`${getApiUrl()}/auth/logout`, {}, {
             headers: {
               Authorization: `Bearer ${session.access_token}`
             },

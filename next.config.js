@@ -125,7 +125,7 @@ const nextConfig = {
               "style-src 'self' 'unsafe-inline'", // unsafe-inline pour Tailwind
               "img-src 'self' data: https: blob:",
               "font-src 'self' data:",
-              "connect-src 'self' https: wss: http://localhost:8000 http://127.0.0.1:8000", // Pour API et WebSocket
+              "connect-src 'self' https: wss: http://localhost:8000 http://127.0.0.1:8000 http://localhost:10000 http://127.0.0.1:10000", // Pour API et WebSocket
               "frame-ancestors 'none'",
               "base-uri 'self'",
               "form-action 'self'",

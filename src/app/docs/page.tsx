@@ -122,6 +122,30 @@ export default function DocsPage() {
                       </code>
                     </pre>
                   </section>
+
+                  <section>
+                    <h3 className="text-lg font-heading font-bold mb-4 flex items-center gap-2">
+                      <Badge>Local</Badge> Build en local (Windows / macOS)
+                    </h3>
+                    <p className="text-muted-foreground mb-4">
+                      Utilisez le mode "Build local" pour compiler sur votre ordinateur et éviter les limites de l'hébergement.
+                    </p>
+                    <pre className="bg-background p-4 rounded-lg border border-white/10 overflow-x-auto">
+                      <code className="text-sm font-mono">
+{`Windows:
+1) Installer Java 17 (JDK) + Android Studio (SDK).
+2) Démarrer le backend local: cd backend && python start.py
+3) Dans Settings, activer "Build local" et mettre http://localhost:10000
+4) Relancer le build depuis votre projet.
+
+macOS:
+1) Installer Java 17 (JDK) + Android Studio (SDK).
+2) Démarrer le backend local: cd backend && python3 start.py
+3) Dans Settings, activer "Build local" et mettre http://localhost:10000
+4) Relancer le build depuis votre projet.`}
+                      </code>
+                    </pre>
+                  </section>
                 </div>
               </ScrollArea>
             </CardContent>
